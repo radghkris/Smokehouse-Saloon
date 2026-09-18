@@ -290,6 +290,26 @@ def resolve_purchase_steps(data, ing_id, qty):
     return steps
 
 
+def apply_made(data, recipe_id, crafts):
+    """Deduct ingredients for `crafts` batches of recipe_id from inventory, and
+    reduce its remaining plan target by the items produced. Returns a list of
+    human-readable ingredient shortfalls (inventory is clamped to 0, never negative)."""
+    r = data["recipes"][recipe_id]
+    yield_qty = r["yieldQty"] if r.get("yieldQty", 0) > 0 else 1
+    shortfalls = []
+    for li in r.get("ingredients", []):
+        need = crafts * li["qty"]
+        inv = data["inventory"].setdefault(li["ingredientId"], {"qty": 0, "preferredVendorId": None})
+        have = inv.get("qty", 0) or 0
+        if need > have:
+            shortfalls.append(f"{ing_name(data, li['ingredientId'])} (had {have:g}, used {need:g})")
+        inv["qty"] = max(0.0, have - need)
+    t = data["plan"]["targets"].get(recipe_id, {"enabled": False, "qty": 0})
+    t["qty"] = max(0.0, (t.get("qty", 0) or 0) - crafts * yield_qty)
+    data["plan"]["targets"][recipe_id] = t
+    return shortfalls
+
+
 def order_line_text(data, top_id, shortage_qty):
     steps = resolve_purchase_steps(data, top_id, shortage_qty)
     last = steps[-1]

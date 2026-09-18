@@ -36,7 +36,7 @@ with tab_dash:
 
     col_a, col_b = st.columns(2)
     with col_a:
-        st.subheader("Grow Next")
+        st.subheader("Acquire Next")
         st.caption("Top shortages, weighted by how many planned recipes need them.")
         if plan["growNext"]:
             df = pd.DataFrame([{

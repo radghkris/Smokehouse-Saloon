@@ -550,7 +550,7 @@ function viewDashboard(){
   return '<div class="stack">'
     + '<div class="grid tiles">'+tiles+'</div>'
     + '<div class="two-col">'
-      + '<div class="card"><div class="section-head"><h2>Grow Next</h2><p class="hint">Top shortages, weighted by how many planned recipes need them.</p></div>'+growTable+'</div>'
+      + '<div class="card"><div class="section-head"><h2>Acquire Next</h2><p class="hint">Top shortages, weighted by how many planned recipes need them.</p></div>'+growTable+'</div>'
       + '<div class="card"><div class="section-head"><h2>Pricing Watch</h2><p class="hint">Cap: '+fmt$(state.settings.priceCap)+' · Tight: over '+fmt$(state.settings.thresholdHealthy)+' · Problematic: over '+fmt$(state.settings.thresholdTight)+'</p></div>'+warnTable+'</div>'
     + '</div>'
   + '</div>';

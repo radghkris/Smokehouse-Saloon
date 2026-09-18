@@ -4,6 +4,8 @@ from tkinter import ttk, messagebox
 import ledger_engine as eng
 
 MONEY_COLS_HELP = "Double-click a row where noted to edit it."
+ROW_EVEN_BG = "#ffffff"
+ROW_ODD_BG = "#f0f0f0"
 
 
 def center(win, parent):
@@ -14,11 +16,41 @@ def center(win, parent):
     win.geometry(f"+{max(x,0)}+{max(y,0)}")
 
 
-def make_tree(parent, columns, widths=None, height=10):
-    frame = ttk.Frame(parent)
+def _sort_key(raw):
+    s = str(raw).strip()
+    stripped = s.replace("$", "").replace(",", "").replace("%", "").replace("★", "").strip()
+    try:
+        return (0, float(stripped))
+    except ValueError:
+        return (1, s.lower())
+
+
+def sort_tree_column(tree, col, reverse):
+    items = [(tree.set(k, col), k) for k in tree.get_children("")]
+    items.sort(key=lambda pair: _sort_key(pair[0]), reverse=reverse)
+    for index, (_, k) in enumerate(items):
+        tree.move(k, "", index)
+    tree.heading(col, command=lambda: sort_tree_column(tree, col, not reverse))
+    stripe_tree(tree)
+
+
+def stripe_tree(tree):
+    """Alternating row shading — ttk.Treeview has no true cell gridlines, so this is
+    what stands in for 'lined rows/columns' to keep wide tables readable."""
+    for i, k in enumerate(tree.get_children("")):
+        tree.item(k, tags=("even" if i % 2 == 0 else "odd",))
+
+
+def make_tree(parent, columns, widths=None, height=10, sortable=True):
+    frame = ttk.Frame(parent, relief="solid", borderwidth=1)
     tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="browse", height=height)
+    tree.tag_configure("even", background=ROW_EVEN_BG)
+    tree.tag_configure("odd", background=ROW_ODD_BG)
     for c in columns:
-        tree.heading(c, text=c)
+        if sortable:
+            tree.heading(c, text=c, command=lambda c=c: sort_tree_column(tree, c, False))
+        else:
+            tree.heading(c, text=c)
         tree.column(c, width=(widths or {}).get(c, 110), anchor="w", stretch=True)
     vsb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
     hsb = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
@@ -34,9 +66,10 @@ def make_tree(parent, columns, widths=None, height=10):
 class IngredientLinesEditor(ttk.Frame):
     """A small editable list of (ingredient, qty) rows used inside the recipe dialog."""
 
-    def __init__(self, parent, ingredient_names, initial_lines):
+    def __init__(self, parent, ingredient_names, initial_lines, on_change=None):
         super().__init__(parent)
         self.ingredient_names = ingredient_names
+        self.on_change = on_change
         self.rows = []
         self.rows_frame = ttk.Frame(self)
         self.rows_frame.pack(fill="x")
@@ -59,10 +92,16 @@ class IngredientLinesEditor(ttk.Frame):
         remove_btn = ttk.Button(row, text="✖", width=3, command=lambda: self._remove_row(entry))
         remove_btn.pack(side="left")
         self.rows.append(entry)
+        if self.on_change:
+            combo.bind("<<ComboboxSelected>>", lambda e: self.on_change())
+            qty_entry.bind("<KeyRelease>", lambda e: self.on_change())
+            self.on_change()
 
     def _remove_row(self, entry):
         entry["frame"].destroy()
         self.rows.remove(entry)
+        if self.on_change:
+            self.on_change()
 
     def get_lines(self, name_to_id):
         out = []
@@ -109,22 +148,52 @@ class RecipeDialog(tk.Toplevel):
 
         ttk.Label(form, text="Sale price").grid(row=2, column=0, sticky="w")
         self.price_var = tk.StringVar(value=str(self.existing["salePrice"]) if self.existing else str(app.data["settings"]["priceCap"]))
-        ttk.Entry(form, textvariable=self.price_var, width=8).grid(row=2, column=1, sticky="w", pady=2)
+        price_entry = ttk.Entry(form, textvariable=self.price_var, width=8)
+        price_entry.grid(row=2, column=1, sticky="w", pady=2)
+        price_entry.bind("<KeyRelease>", lambda e: self._update_margin_preview())
 
         self.active_var = tk.BooleanVar(value=self.existing["active"] if self.existing else True)
         ttk.Checkbutton(form, text="Active (included in planner by default)", variable=self.active_var).grid(row=2, column=2, columnspan=2, sticky="w")
 
+        self.margin_var = tk.StringVar(value="—")
+
         ttk.Label(form, text="Ingredients").grid(row=3, column=0, sticky="nw", pady=(8, 0))
         initial_lines = [(eng.ing_name(app.data, l["ingredientId"]), l["qty"]) for l in self.existing["ingredients"]] if self.existing else []
-        self.lines_editor = IngredientLinesEditor(form, names_sorted, initial_lines)
+        self.lines_editor = IngredientLinesEditor(form, names_sorted, initial_lines, on_change=self._update_margin_preview)
         self.lines_editor.grid(row=3, column=1, columnspan=3, sticky="we", pady=(8, 0))
 
+        ttk.Label(form, textvariable=self.margin_var, font=("Segoe UI", 10, "bold"), foreground="#2a6b2a").grid(row=4, column=0, columnspan=4, sticky="w", pady=(10, 0))
+
         btns = ttk.Frame(form)
-        btns.grid(row=4, column=0, columnspan=4, sticky="e", pady=(12, 0))
+        btns.grid(row=5, column=0, columnspan=4, sticky="e", pady=(12, 0))
         ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="left", padx=4)
         ttk.Button(btns, text="Save", command=self._save).pack(side="left")
 
+        yield_entry_widgets = [w for w in form.grid_slaves(row=1, column=3)]
+        for w in yield_entry_widgets:
+            w.bind("<KeyRelease>", lambda e: self._update_margin_preview())
+
+        self._update_margin_preview()
         center(self, app)
+
+    def _update_margin_preview(self):
+        try:
+            yield_qty = max(1, float(self.yield_var.get() or 1))
+        except ValueError:
+            yield_qty = 1
+        try:
+            sale = max(0.0, float(self.price_var.get() or 0))
+        except ValueError:
+            sale = 0.0
+        lines = self.lines_editor.get_lines(self.name_to_id) if hasattr(self, "lines_editor") else []
+        cost_total = sum(eng.ing_cost(self.app.data, l["ingredientId"])["cost"] * l["qty"] for l in lines)
+        cost_per_item = cost_total / yield_qty
+        profit = sale - cost_per_item
+        if sale > 0:
+            margin_pct = profit / sale * 100
+            self.margin_var.set(f"{margin_pct:.0f}% margin is {eng.fmt_money(profit)}  (cost {eng.fmt_money(cost_per_item)}/item, sale {eng.fmt_money(sale)})")
+        else:
+            self.margin_var.set(f"Cost {eng.fmt_money(cost_per_item)}/item — set a sale price to see margin")
 
     def _save(self):
         name = self.name_var.get().strip()
@@ -326,92 +395,73 @@ class VendorDialog(tk.Toplevel):
         self.destroy()
 
 
-class InventoryDialog(tk.Toplevel):
-    def __init__(self, app, ing_id):
-        super().__init__(app)
-        self.app = app
-        self.ing_id = ing_id
-        ing = app.data["ingredients"][ing_id]
-        self.title(f"Edit Inventory — {ing['name']}")
-        self.resizable(False, False)
-        self.transient(app)
-        self.grab_set()
+def inline_edit_entry(tree, row_id, col, initial, on_commit, validate=None):
+    """Float an Entry directly over a treeview cell. Enter (or clicking away)
+    commits and closes; Escape cancels and closes. No popup window, nothing to
+    reposition — it just edits in place."""
+    bbox = tree.bbox(row_id, col)
+    if not bbox:
+        return
+    x, y, w, h = bbox
+    var = tk.StringVar(value=initial)
+    entry = ttk.Entry(tree, textvariable=var)
+    entry.place(x=x, y=y, width=w, height=h)
+    entry.focus_set()
+    entry.select_range(0, "end")
+    state = {"done": False}
 
-        inv = app.data["inventory"].get(ing_id, {"qty": 0, "preferredVendorId": None})
-        vendors_here = [v for v in app.data["vendors"] if v["ingredientId"] == ing_id]
-        self.vendor_options = ["cheapest available"] + [
-            v["vendorName"] + (f" ({eng.fmt_money(v['price'])})" if v.get("price") is not None else " (TBD)") for v in vendors_here
-        ]
-        self.vendor_ids = [None] + [v["id"] for v in vendors_here]
-        current_idx = 0
-        if inv.get("preferredVendorId") in self.vendor_ids:
-            current_idx = self.vendor_ids.index(inv["preferredVendorId"])
-
-        form = ttk.Frame(self, padding=12)
-        form.pack()
-        ttk.Label(form, text="On hand").grid(row=0, column=0, sticky="w")
-        self.qty_var = tk.StringVar(value=str(inv.get("qty", 0)))
-        ttk.Entry(form, textvariable=self.qty_var, width=12).grid(row=0, column=1, pady=2)
-
-        ttk.Label(form, text="Preferred source").grid(row=1, column=0, sticky="w")
-        self.pref_var = tk.StringVar(value=self.vendor_options[current_idx])
-        ttk.Combobox(form, textvariable=self.pref_var, values=self.vendor_options, state="readonly", width=26).grid(row=1, column=1, pady=2)
-
-        btns = ttk.Frame(form)
-        btns.grid(row=2, column=0, columnspan=2, sticky="e", pady=(10, 0))
-        ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="left", padx=4)
-        ttk.Button(btns, text="Save", command=self._save).pack(side="left")
-        center(self, app)
-
-    def _save(self):
-        try:
-            qty = max(0.0, float(self.qty_var.get()))
-        except ValueError:
-            messagebox.showerror("Invalid number", "On hand must be a number.", parent=self)
+    def commit(event=None):
+        if state["done"]:
             return
-        idx = self.vendor_options.index(self.pref_var.get())
-        pref_id = self.vendor_ids[idx]
-        self.app.data["inventory"][self.ing_id] = {"qty": qty, "preferredVendorId": pref_id}
-        eng.save_data(self.app.data)
-        self.app.refresh_all()
-        self.destroy()
-
-
-class TargetDialog(tk.Toplevel):
-    def __init__(self, app, recipe_id):
-        super().__init__(app)
-        self.app = app
-        self.recipe_id = recipe_id
-        r = app.data["recipes"][recipe_id]
-        self.title(f"Target — {r['name']}")
-        self.resizable(False, False)
-        self.transient(app)
-        self.grab_set()
-
-        t = app.data["plan"]["targets"].get(recipe_id, {"enabled": False, "qty": 0})
-        form = ttk.Frame(self, padding=12)
-        form.pack()
-        ttk.Label(form, text="Target quantity").grid(row=0, column=0, sticky="w")
-        self.qty_var = tk.StringVar(value=str(t.get("qty", 0)))
-        ttk.Entry(form, textvariable=self.qty_var, width=10).grid(row=0, column=1, pady=2)
-
-        btns = ttk.Frame(form)
-        btns.grid(row=1, column=0, columnspan=2, sticky="e", pady=(10, 0))
-        ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="left", padx=4)
-        ttk.Button(btns, text="Save", command=self._save).pack(side="left")
-        center(self, app)
-
-    def _save(self):
-        try:
-            qty = max(0.0, float(self.qty_var.get()))
-        except ValueError:
-            messagebox.showerror("Invalid number", "Target quantity must be a number.", parent=self)
+        raw = var.get()
+        if validate and not validate(raw):
             return
-        cur = self.app.data["plan"]["targets"].get(self.recipe_id, {"enabled": False, "qty": 0})
-        self.app.data["plan"]["targets"][self.recipe_id] = {"enabled": cur.get("enabled", False), "qty": qty}
-        eng.save_data(self.app.data)
-        self.app.refresh_all()
-        self.destroy()
+        state["done"] = True
+        entry.destroy()
+        on_commit(raw)
+
+    def cancel(event=None):
+        if state["done"]:
+            return
+        state["done"] = True
+        entry.destroy()
+
+    entry.bind("<Return>", commit)
+    entry.bind("<KP_Enter>", commit)
+    entry.bind("<Escape>", cancel)
+    entry.bind("<FocusOut>", commit)
+
+
+def inline_edit_combobox(tree, row_id, col, options, initial, on_commit):
+    """Same idea as inline_edit_entry, but a dropdown floated over the cell."""
+    bbox = tree.bbox(row_id, col)
+    if not bbox:
+        return
+    x, y, w, h = bbox
+    var = tk.StringVar(value=initial)
+    combo = ttk.Combobox(tree, textvariable=var, values=options, state="readonly")
+    combo.place(x=x, y=y, width=w, height=h)
+    combo.focus_set()
+    state = {"done": False}
+
+    def commit(event=None):
+        if state["done"]:
+            return
+        state["done"] = True
+        combo.destroy()
+        on_commit(var.get())
+
+    def cancel(event=None):
+        if state["done"]:
+            return
+        state["done"] = True
+        combo.destroy()
+
+    combo.bind("<<ComboboxSelected>>", commit)
+    combo.bind("<Return>", commit)
+    combo.bind("<Escape>", cancel)
+    combo.bind("<FocusOut>", commit)
+
 
 
 class SettingsFrame(ttk.Frame):
@@ -545,7 +595,7 @@ class LedgerApp(tk.Tk):
         mid.columnconfigure(1, weight=1)
         mid.rowconfigure(1, weight=1)
 
-        ttk.Label(mid, text="Grow Next", font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(mid, text="Acquire Next", font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
         grow_frame, self.grow_tree = make_tree(mid, ["Ingredient", "Shortage", "Recipes Using", "Score"],
                                                 {"Ingredient": 150}, height=8)
         grow_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 6))
@@ -690,7 +740,7 @@ class LedgerApp(tk.Tk):
     def _build_inventory(self):
         top = ttk.Frame(self.tab_inv, padding=(10, 10, 10, 0))
         top.pack(fill="x")
-        ttk.Label(top, text="Double-click a row to set quantity on hand and preferred supplier.", foreground="#666").pack(side="left")
+        ttk.Label(top, text="Double-click On Hand or Preferred Source to edit right in the table — Enter saves, Esc cancels.", foreground="#666").pack(side="left")
         self.inv_total_var = tk.StringVar(value="Total value: —")
         ttk.Label(top, textvariable=self.inv_total_var, font=("Segoe UI", 10, "bold")).pack(side="right")
 
@@ -699,28 +749,57 @@ class LedgerApp(tk.Tk):
             {"Ingredient": 170, "Preferred Source": 170}, height=18,
         )
         frame.pack(fill="both", expand=True, padx=10, pady=10)
-        self.inv_tree.bind("<Double-1>", self._open_inventory_dialog)
+        self.inv_tree.bind("<Double-1>", self._inventory_cell_click)
 
-    def _open_inventory_dialog(self, event):
-        row_id = self.inv_tree.identify_row(event.y)
-        if row_id:
-            InventoryDialog(self, row_id)
+    def _inventory_cell_click(self, event):
+        tree = self.inv_tree
+        row_id = tree.identify_row(event.y)
+        col = tree.identify_column(event.x)
+        if not row_id:
+            return
+        if col == "#3":  # On Hand
+            def commit(raw, ing_id=row_id):
+                try:
+                    qty = max(0.0, float(raw))
+                except ValueError:
+                    messagebox.showerror("Invalid number", "On hand must be a number.")
+                    return
+                inv = self.data["inventory"].setdefault(ing_id, {"qty": 0, "preferredVendorId": None})
+                inv["qty"] = qty
+                eng.save_data(self.data)
+                self.refresh_all()
+            inline_edit_entry(tree, row_id, col, tree.set(row_id, col), commit)
+        elif col == "#4":  # Preferred Source
+            vendors_here = [v for v in self.data["vendors"] if v["ingredientId"] == row_id]
+            options = ["cheapest available"] + [
+                v["vendorName"] + (f" ({eng.fmt_money(v['price'])})" if v.get("price") is not None else " (TBD)") for v in vendors_here
+            ]
+            ids = [None] + [v["id"] for v in vendors_here]
+
+            def commit(chosen, ing_id=row_id):
+                pid = ids[options.index(chosen)] if chosen in options else None
+                inv = self.data["inventory"].setdefault(ing_id, {"qty": 0, "preferredVendorId": None})
+                inv["preferredVendorId"] = pid
+                eng.save_data(self.data)
+                self.refresh_all()
+            inline_edit_combobox(tree, row_id, col, options, tree.set(row_id, col), commit)
 
     # ---------- Planner ----------
     def _build_planner(self):
         top = ttk.Frame(self.tab_planner, padding=(10, 10, 10, 0))
         top.pack(fill="x")
-        ttk.Label(top, text="Double-click a row to toggle Enabled, or edit its Target Qty:").pack(side="left")
+        ttk.Label(top, text="Double-click Enabled or Target Qty to edit in place.").pack(side="left")
         self.bulk_qty_var = tk.StringVar(value="100")
         ttk.Entry(top, textvariable=self.bulk_qty_var, width=8).pack(side="left", padx=(10, 4))
-        ttk.Button(top, text="Set target for all enabled", command=self._bulk_apply).pack(side="left")
+        ttk.Button(top, text="Set target for all enabled", command=self._bulk_apply).pack(side="left", padx=(0, 12))
+        ttk.Button(top, text="Mark Made…", command=self._mark_made).pack(side="left")
 
         plan_frame, self.plan_tree = make_tree(
             self.tab_planner, ["Enabled", "Recipe", "Target Qty", "Crafts Needed", "Run Cost"],
             {"Recipe": 180}, height=10,
         )
         plan_frame.pack(fill="both", expand=True, padx=10, pady=(6, 6))
-        self.plan_tree.bind("<Double-1>", self._planner_row_click)
+        self.plan_tree.bind("<Double-1>", self._planner_cell_click)
 
         order_label = ttk.Frame(self.tab_planner, padding=(10, 4, 10, 0))
         order_label.pack(fill="x")
@@ -733,19 +812,30 @@ class LedgerApp(tk.Tk):
         )
         order_frame.pack(fill="both", expand=True, padx=10, pady=(4, 10))
 
-    def _planner_row_click(self, event):
-        row_id = self.plan_tree.identify_row(event.y)
+    def _planner_cell_click(self, event):
+        tree = self.plan_tree
+        row_id = tree.identify_row(event.y)
         if not row_id:
             return
-        col = self.plan_tree.identify_column(event.x)
-        if col == "#1":  # Enabled column
+        col = tree.identify_column(event.x)
+        if col == "#1":  # Enabled
             t = self.data["plan"]["targets"].get(row_id, {"enabled": False, "qty": 0})
             t["enabled"] = not t.get("enabled", False)
             self.data["plan"]["targets"][row_id] = t
             eng.save_data(self.data)
             self.refresh_all()
-        else:
-            TargetDialog(self, row_id)
+        elif col == "#3":  # Target Qty
+            def commit(raw, rid=row_id):
+                try:
+                    qty = max(0.0, float(raw))
+                except ValueError:
+                    messagebox.showerror("Invalid number", "Target quantity must be a number.")
+                    return
+                cur = self.data["plan"]["targets"].get(rid, {"enabled": False, "qty": 0})
+                self.data["plan"]["targets"][rid] = {"enabled": cur.get("enabled", False), "qty": qty}
+                eng.save_data(self.data)
+                self.refresh_all()
+            inline_edit_entry(tree, row_id, col, tree.set(row_id, col), commit)
 
     def _bulk_apply(self):
         try:
@@ -758,6 +848,53 @@ class LedgerApp(tk.Tk):
                 t["qty"] = qty
         eng.save_data(self.data)
         self.refresh_all()
+
+    def _mark_made(self):
+        sel = self.plan_tree.selection()
+        if not sel:
+            messagebox.showinfo("No selection", "Select a recipe in the table above first.")
+            return
+        rid = sel[0]
+        r = self.data["recipes"][rid]
+        t = self.data["plan"]["targets"].get(rid, {"enabled": False, "qty": 0})
+        yield_qty = r["yieldQty"] if r.get("yieldQty", 0) > 0 else 1
+        default_crafts = max(1, -(-int(t.get("qty", 0)) // yield_qty)) if t.get("qty", 0) > 0 else 1
+
+        dialog = tk.Toplevel(self)
+        dialog.title(f"Mark Made — {r['name']}")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.grab_set()
+        form = ttk.Frame(dialog, padding=12)
+        form.pack()
+        uses_parts = [f"{eng.ing_name(self.data, li['ingredientId'])} x{li['qty']:g}" for li in r["ingredients"]]
+        ttk.Label(form, text=f"How many times did you craft \"{r['name']}\"?").grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(form, text="(each craft uses: " + ", ".join(uses_parts) + ")",
+                  foreground="#666", wraplength=340, justify="left").grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 8))
+        crafts_var = tk.StringVar(value=str(default_crafts))
+        ttk.Entry(form, textvariable=crafts_var, width=8).grid(row=2, column=0, sticky="w")
+
+        def confirm():
+            try:
+                crafts = int(float(crafts_var.get()))
+            except ValueError:
+                messagebox.showerror("Invalid number", "Enter a whole number of crafts.", parent=dialog)
+                return
+            if crafts <= 0:
+                messagebox.showerror("Invalid number", "Must be at least 1.", parent=dialog)
+                return
+            shortfalls = eng.apply_made(self.data, rid, crafts)
+            eng.save_data(self.data)
+            self.refresh_all()
+            dialog.destroy()
+            if shortfalls:
+                messagebox.showwarning("Stock ran short", "Inventory was set to 0 for:\n" + "\n".join(shortfalls))
+
+        btns = ttk.Frame(form)
+        btns.grid(row=3, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        ttk.Button(btns, text="Cancel", command=dialog.destroy).pack(side="left", padx=4)
+        ttk.Button(btns, text="Deduct & Update Planner", command=confirm).pack(side="left")
+        center(dialog, self)
 
     # ---------- refresh ----------
     def refresh_all(self):
@@ -793,6 +930,8 @@ class LedgerApp(tk.Tk):
                 continue
             flag = ("OVER CAP, " if m["overCap"] else "") + ("problematic" if m["tier"] == "bad" else "tight")
             self.watch_tree.insert("", "end", values=(r["name"], eng.fmt_money(m["costPerItem"]), eng.fmt_money(r["salePrice"]), flag))
+        stripe_tree(self.grow_tree)
+        stripe_tree(self.watch_tree)
 
     def _refresh_recipes(self):
         self.recipes_tree.delete(*self.recipes_tree.get_children())
@@ -806,6 +945,7 @@ class LedgerApp(tk.Tk):
                 eng.fmt_money(r["salePrice"]) + (" (over cap)" if m["overCap"] else ""), eng.fmt_money(m["profit"]),
                 margin, tier, "Yes" if r["active"] else "No",
             ))
+        stripe_tree(self.recipes_tree)
 
     def _refresh_ingredients(self):
         self.ing_tree.delete(*self.ing_tree.get_children())
@@ -816,11 +956,13 @@ class LedgerApp(tk.Tk):
             res = eng.ing_cost(self.data, iid)
             cost_txt = "NO PRICE" if res["warn"] else eng.fmt_money(res["cost"])
             self.ing_tree.insert("", "end", iid=iid, values=(ing["name"], ing["unit"], cost_txt, reason_map.get(res["reason"], res["reason"])))
+        stripe_tree(self.ing_tree)
 
         self.conv_tree.delete(*self.conv_tree.get_children())
         for c in self.data["conversions"]:
             desc = f"{c['inputQty']:g}× {eng.ing_name(self.data, c['inputId'])} → {c['outputQty']:g}× {eng.ing_name(self.data, c['outputId'])}"
             self.conv_tree.insert("", "end", iid=c["id"], values=(desc, eng.fmt_money(c.get("cost") or 0)))
+        stripe_tree(self.conv_tree)
 
     def _refresh_vendors(self):
         self.vendor_tree.delete(*self.vendor_tree.get_children())
@@ -836,6 +978,7 @@ class LedgerApp(tk.Tk):
                     self.data["ingredients"][iid]["name"], v["vendorName"], v.get("town") or "—",
                     price_txt, v.get("stock", "unknown"), v.get("note", ""),
                 ))
+        stripe_tree(self.vendor_tree)
 
     def _refresh_inventory(self):
         self.inv_tree.delete(*self.inv_tree.get_children())
@@ -856,6 +999,7 @@ class LedgerApp(tk.Tk):
                 ing["name"], ing["unit"], f"{inv.get('qty', 0):g}", pref_txt,
                 "NO PRICE" if res["warn"] else eng.fmt_money(res["cost"]), eng.fmt_money(value),
             ))
+        stripe_tree(self.inv_tree)
         self.inv_total_var.set(f"Total value: {eng.fmt_money(total)}")
 
     def _refresh_planner(self):
@@ -869,6 +1013,7 @@ class LedgerApp(tk.Tk):
                 "☑" if t.get("enabled") else "☐", r["name"], f"{t.get('qty', 0):g}",
                 run["crafts"] if run else "—", eng.fmt_money(run["runCost"]) if run else "—",
             ))
+        stripe_tree(self.plan_tree)
 
         shortages = [s for s in plan["shortages"] if s["shortage"] > 0]
         order_total = 0.0
@@ -880,6 +1025,7 @@ class LedgerApp(tk.Tk):
             self.order_tree.insert("", "end", values=(
                 eng.ing_name(self.data, s["id"]), int(s["shortage"]), eng.order_line_text(self.data, s["id"], s["shortage"]),
             ))
+        stripe_tree(self.order_tree)
         self.order_total_var.set(f"Estimated spend: {eng.fmt_money(order_total)}")
 
 
