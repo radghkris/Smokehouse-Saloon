@@ -1,11 +1,61 @@
+import ctypes
+import sys
 import tkinter as tk
+import tkinter.font as tkfont
+from pathlib import Path
 from tkinter import ttk, messagebox
 
 import ledger_engine as eng
 
 MONEY_COLS_HELP = "Double-click a row where noted to edit it."
-ROW_EVEN_BG = "#ffffff"
-ROW_ODD_BG = "#f0f0f0"
+
+# Same palette as the browser version (blackwater-ledger.html) -- a saloon
+# ledger-book look: aged paper, ink brown, rust-red accent.
+BG = "#f2e9d6"
+SURFACE = "#fbf5e8"
+SURFACE2 = "#ece0c4"
+INK = "#2c2013"
+INK_DIM = "#6c5c42"
+LINE = "#d9cba8"
+ACCENT = "#9a3324"
+ACCENT2 = "#a9762f"
+GOOD = "#3d7a4a"
+GOOD_BG = "#d9d9c2"
+WARN = "#b0791e"
+WARN_BG = "#e7d7b9"
+BAD = "#a3283f"
+BAD_BG = "#e7cec1"
+
+ROW_EVEN_BG = SURFACE
+ROW_ODD_BG = SURFACE2
+
+FONTS_DIR = Path(__file__).resolve().parent / "fonts"
+DISPLAY_FONT_NAME = "Rye"
+BODY_FONT_NAME = "Libre Franklin"
+RESOLVED = {"display": "Georgia", "body": "Segoe UI"}
+
+
+def load_local_fonts():
+    """Registers the bundled .ttf files for this process only (Windows) so the
+    app can use the same Rye/Libre Franklin faces as the browser version
+    without installing anything system-wide. Falls back silently elsewhere."""
+    if sys.platform != "win32" or not FONTS_DIR.is_dir():
+        return
+    FR_PRIVATE = 0x10
+    try:
+        for f in FONTS_DIR.glob("*.ttf"):
+            ctypes.windll.gdi32.AddFontResourceExW(str(f), FR_PRIVATE, 0)
+    except Exception:
+        pass
+
+
+def resolve_fonts(root):
+    """Returns (display_family, body_family) — the real bundled faces if Tk can
+    see them after load_local_fonts(), else the closest built-in stand-ins."""
+    available = set(tkfont.families(root))
+    display = DISPLAY_FONT_NAME if DISPLAY_FONT_NAME in available else "Georgia"
+    body = BODY_FONT_NAME if BODY_FONT_NAME in available else "Segoe UI"
+    return display, body
 
 
 def center(win, parent):
@@ -41,16 +91,23 @@ def stripe_tree(tree):
         tree.item(k, tags=("even" if i % 2 == 0 else "odd",))
 
 
+def configure_tier_tags(tree):
+    tree.tag_configure("tier_good", background=GOOD_BG, foreground=GOOD)
+    tree.tag_configure("tier_warn", background=WARN_BG, foreground=WARN)
+    tree.tag_configure("tier_bad", background=BAD_BG, foreground=BAD)
+
+
 def make_tree(parent, columns, widths=None, height=10, sortable=True):
     frame = ttk.Frame(parent, relief="solid", borderwidth=1)
     tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="browse", height=height)
     tree.tag_configure("even", background=ROW_EVEN_BG)
     tree.tag_configure("odd", background=ROW_ODD_BG)
     for c in columns:
+        header_text = c.upper()
         if sortable:
-            tree.heading(c, text=c, command=lambda c=c: sort_tree_column(tree, c, False))
+            tree.heading(c, text=header_text, command=lambda c=c: sort_tree_column(tree, c, False))
         else:
-            tree.heading(c, text=c)
+            tree.heading(c, text=header_text)
         tree.column(c, width=(widths or {}).get(c, 110), anchor="w", stretch=True)
     vsb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
     hsb = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
@@ -126,6 +183,7 @@ class RecipeDialog(tk.Toplevel):
         self.resizable(False, False)
         self.transient(app)
         self.grab_set()
+        self.configure(background=BG)
 
         ids_sorted = sorted(app.data["ingredients"], key=lambda i: app.data["ingredients"][i]["name"])
         self.name_to_id = {app.data["ingredients"][i]["name"]: i for i in ids_sorted}
@@ -162,7 +220,7 @@ class RecipeDialog(tk.Toplevel):
         self.lines_editor = IngredientLinesEditor(form, names_sorted, initial_lines, on_change=self._update_margin_preview)
         self.lines_editor.grid(row=3, column=1, columnspan=3, sticky="we", pady=(8, 0))
 
-        ttk.Label(form, textvariable=self.margin_var, font=("Segoe UI", 10, "bold"), foreground="#2a6b2a").grid(row=4, column=0, columnspan=4, sticky="w", pady=(10, 0))
+        ttk.Label(form, textvariable=self.margin_var, font=(RESOLVED["body"], 10, "bold"), foreground=GOOD).grid(row=4, column=0, columnspan=4, sticky="w", pady=(10, 0))
 
         btns = ttk.Frame(form)
         btns.grid(row=5, column=0, columnspan=4, sticky="e", pady=(12, 0))
@@ -234,6 +292,7 @@ class IngredientDialog(tk.Toplevel):
         self.resizable(False, False)
         self.transient(app)
         self.grab_set()
+        self.configure(background=BG)
 
         form = ttk.Frame(self, padding=12)
         form.pack()
@@ -277,6 +336,7 @@ class ConversionDialog(tk.Toplevel):
         self.resizable(False, False)
         self.transient(app)
         self.grab_set()
+        self.configure(background=BG)
 
         ids_sorted = sorted(app.data["ingredients"], key=lambda i: app.data["ingredients"][i]["name"])
         self.name_to_id = {app.data["ingredients"][i]["name"]: i for i in ids_sorted}
@@ -341,6 +401,7 @@ class VendorDialog(tk.Toplevel):
         self.resizable(False, False)
         self.transient(app)
         self.grab_set()
+        self.configure(background=BG)
 
         ids_sorted = sorted(app.data["ingredients"], key=lambda i: app.data["ingredients"][i]["name"])
         self.name_to_id = {app.data["ingredients"][i]["name"]: i for i in ids_sorted}
@@ -499,7 +560,7 @@ class SettingsFrame(ttk.Frame):
         self.override_var = tk.StringVar(value=str(s["meatOverrideCost"]))
         ttk.Entry(meat, textvariable=self.override_var, width=10).grid(row=4, column=1, sticky="w")
         ttk.Button(meat, text="Save meat settings", command=self._save_meat).grid(row=5, column=0, pady=(8, 0), sticky="w")
-        ttk.Label(meat, text="The special first batch (594 cuts for a flat $10 fee) is a one-off — it isn't used as the ongoing basis.", wraplength=420, justify="left", foreground="#666").grid(row=6, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Label(meat, text="The special first batch (594 cuts for a flat $10 fee) is a one-off — it isn't used as the ongoing basis.", wraplength=420, justify="left", foreground=INK_DIM).grid(row=6, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
     def _save_pricing(self):
         try:
@@ -538,16 +599,40 @@ class LedgerApp(tk.Tk):
         self.minsize(900, 600)
         self.data = eng.load_data()
 
+        load_local_fonts()
+        display, body = resolve_fonts(self)
+        RESOLVED["display"], RESOLVED["body"] = display, body
+        self.configure(background=BG)
+
         style = ttk.Style(self)
         try:
-            style.theme_use("vista")
+            style.theme_use("clam")
         except tk.TclError:
             pass
+        style.configure(".", background=BG, foreground=INK, font=(body, 10))
+        style.configure("TFrame", background=BG)
+        style.configure("TLabel", background=BG, foreground=INK, font=(body, 10))
+        style.configure("TButton", background=SURFACE2, foreground=INK, font=(body, 10), padding=5, bordercolor=LINE)
+        style.map("TButton", background=[("active", ACCENT2), ("pressed", ACCENT)], foreground=[("active", SURFACE), ("pressed", SURFACE)])
+        style.configure("TCheckbutton", background=BG, foreground=INK, font=(body, 10))
+        style.configure("TRadiobutton", background=BG, foreground=INK, font=(body, 10))
+        style.configure("TEntry", fieldbackground=SURFACE, foreground=INK, bordercolor=LINE)
+        style.configure("TCombobox", fieldbackground=SURFACE, foreground=INK, background=SURFACE2)
+        style.configure("TLabelframe", background=BG, bordercolor=LINE)
+        style.configure("TLabelframe.Label", background=BG, foreground=ACCENT, font=(display, 12))
+        style.configure("TNotebook", background=BG, bordercolor=LINE)
+        style.configure("TNotebook.Tab", background=SURFACE2, foreground=INK_DIM, font=(body, 10, "bold"), padding=(12, 6))
+        style.map("TNotebook.Tab", background=[("selected", ACCENT)], foreground=[("selected", SURFACE)])
+        style.configure("Treeview", background=SURFACE, fieldbackground=SURFACE, foreground=INK, font=(body, 10), rowheight=24, bordercolor=LINE)
+        style.configure("Treeview.Heading", background=SURFACE2, foreground=INK_DIM, font=(body, 9, "bold"))
+        style.map("Treeview", background=[("selected", ACCENT2)], foreground=[("selected", SURFACE)])
+        global ROW_EVEN_BG, ROW_ODD_BG
+        ROW_EVEN_BG, ROW_ODD_BG = SURFACE, SURFACE2
 
         header = ttk.Frame(self, padding=(12, 10, 12, 4))
         header.pack(fill="x")
-        ttk.Label(header, text="\U0001F356 Blackwater Ledger", font=("Segoe UI", 16, "bold")).pack(side="left")
-        ttk.Label(header, text="  The Smokehouse at Blackwater Saloon — data saves to ledger_data.json", foreground="#666").pack(side="left")
+        ttk.Label(header, text="\U0001F356 Blackwater Ledger", font=(display, 20), foreground=ACCENT).pack(side="left")
+        ttk.Label(header, text="  The Smokehouse at Blackwater Saloon — data saves to ledger_data.json", foreground=INK_DIM).pack(side="left")
 
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True, padx=8, pady=8)
@@ -587,7 +672,7 @@ class LedgerApp(tk.Tk):
             box = ttk.LabelFrame(top, text=label, padding=10)
             box.grid(row=0, column=i, padx=6, sticky="ew")
             top.columnconfigure(i, weight=1)
-            ttk.Label(box, textvariable=self.metric_vars[key], font=("Segoe UI", 18, "bold")).pack()
+            ttk.Label(box, textvariable=self.metric_vars[key], font=(RESOLVED["body"], 18, "bold"), foreground=INK).pack()
 
         mid = ttk.Frame(self.tab_dash, padding=10)
         mid.pack(fill="both", expand=True)
@@ -595,21 +680,22 @@ class LedgerApp(tk.Tk):
         mid.columnconfigure(1, weight=1)
         mid.rowconfigure(1, weight=1)
 
-        ttk.Label(mid, text="Acquire Next", font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(mid, text="Acquire Next", font=(RESOLVED["display"], 14), foreground=ACCENT).grid(row=0, column=0, sticky="w")
         grow_frame, self.grow_tree = make_tree(mid, ["Ingredient", "Shortage", "Recipes Using", "Score"],
                                                 {"Ingredient": 150}, height=8)
         grow_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 6))
 
-        ttk.Label(mid, text="Pricing Watch", font=("Segoe UI", 11, "bold")).grid(row=0, column=1, sticky="w")
+        ttk.Label(mid, text="Pricing Watch", font=(RESOLVED["display"], 14), foreground=ACCENT).grid(row=0, column=1, sticky="w")
         watch_frame, self.watch_tree = make_tree(mid, ["Recipe", "Cost/Item", "Sale Price", "Flag"],
                                                   {"Recipe": 170}, height=8)
         watch_frame.grid(row=1, column=1, sticky="nsew", padx=(6, 0))
+        configure_tier_tags(self.watch_tree)
 
     # ---------- Recipes ----------
     def _build_recipes(self):
         top = ttk.Frame(self.tab_recipes, padding=(10, 10, 10, 0))
         top.pack(fill="x")
-        ttk.Label(top, text="Double-click a recipe row to toggle Active on/off.", foreground="#666").pack(side="left")
+        ttk.Label(top, text="Double-click a recipe row to toggle Active on/off.", foreground=INK_DIM).pack(side="left")
         ttk.Button(top, text="Add Recipe", command=lambda: RecipeDialog(self)).pack(side="right", padx=4)
         ttk.Button(top, text="Edit Selected", command=self._edit_selected_recipe).pack(side="right", padx=4)
         ttk.Button(top, text="Delete Selected", command=self._delete_selected_recipe).pack(side="right", padx=4)
@@ -617,6 +703,7 @@ class LedgerApp(tk.Tk):
         cols = ["Name", "Category", "Yield", "Craft Cost", "Cost/Item", "Sale Price", "Profit", "Margin", "Tier", "Active"]
         frame, self.recipes_tree = make_tree(self.tab_recipes, cols, {"Name": 200}, height=16)
         frame.pack(fill="both", expand=True, padx=10, pady=10)
+        configure_tier_tags(self.recipes_tree)
         self.recipes_tree.bind("<Double-1>", self._toggle_recipe_active)
 
     def _selected_recipe_id(self):
@@ -665,7 +752,7 @@ class LedgerApp(tk.Tk):
 
         conv_top = ttk.Frame(self.tab_ing, padding=(10, 4, 10, 0))
         conv_top.pack(fill="x")
-        ttk.Label(conv_top, text="Conversions (e.g. Sugarcane → Sugar)", font=("Segoe UI", 10, "bold")).pack(side="left")
+        ttk.Label(conv_top, text="Conversions (e.g. Sugarcane → Sugar)", font=(RESOLVED["display"], 13), foreground=ACCENT).pack(side="left")
         ttk.Button(conv_top, text="Add Conversion", command=lambda: ConversionDialog(self)).pack(side="right", padx=4)
         ttk.Button(conv_top, text="Delete Selected", command=self._delete_selected_conversion).pack(side="right", padx=4)
 
@@ -710,7 +797,7 @@ class LedgerApp(tk.Tk):
     def _build_vendors(self):
         top = ttk.Frame(self.tab_vendors, padding=(10, 10, 10, 0))
         top.pack(fill="x")
-        ttk.Label(top, text="Cheapest known price is marked automatically.", foreground="#666").pack(side="left")
+        ttk.Label(top, text="Cheapest known price is marked automatically.", foreground=INK_DIM).pack(side="left")
         ttk.Button(top, text="Add Vendor Price", command=lambda: VendorDialog(self)).pack(side="right", padx=4)
         ttk.Button(top, text="Delete Selected", command=self._delete_selected_vendor).pack(side="right", padx=4)
 
@@ -740,9 +827,9 @@ class LedgerApp(tk.Tk):
     def _build_inventory(self):
         top = ttk.Frame(self.tab_inv, padding=(10, 10, 10, 0))
         top.pack(fill="x")
-        ttk.Label(top, text="Double-click On Hand or Preferred Source to edit right in the table — Enter saves, Esc cancels.", foreground="#666").pack(side="left")
+        ttk.Label(top, text="Double-click On Hand or Preferred Source to edit right in the table — Enter saves, Esc cancels.", foreground=INK_DIM).pack(side="left")
         self.inv_total_var = tk.StringVar(value="Total value: —")
-        ttk.Label(top, textvariable=self.inv_total_var, font=("Segoe UI", 10, "bold")).pack(side="right")
+        ttk.Label(top, textvariable=self.inv_total_var, font=(RESOLVED["body"], 10, "bold"), foreground=INK).pack(side="right")
 
         frame, self.inv_tree = make_tree(
             self.tab_inv, ["Ingredient", "Unit", "On Hand", "Preferred Source", "Unit Cost", "Value"],
@@ -803,9 +890,9 @@ class LedgerApp(tk.Tk):
 
         order_label = ttk.Frame(self.tab_planner, padding=(10, 4, 10, 0))
         order_label.pack(fill="x")
-        ttk.Label(order_label, text="What To Order", font=("Segoe UI", 11, "bold")).pack(side="left")
+        ttk.Label(order_label, text="What To Order", font=(RESOLVED["display"], 14), foreground=ACCENT).pack(side="left")
         self.order_total_var = tk.StringVar(value="")
-        ttk.Label(order_label, textvariable=self.order_total_var, foreground="#666").pack(side="left", padx=10)
+        ttk.Label(order_label, textvariable=self.order_total_var, foreground=INK_DIM).pack(side="left", padx=10)
 
         order_frame, self.order_tree = make_tree(
             self.tab_planner, ["Ingredient", "Short", "Do This"], {"Ingredient": 140, "Do This": 420}, height=10,
@@ -865,12 +952,13 @@ class LedgerApp(tk.Tk):
         dialog.resizable(False, False)
         dialog.transient(self)
         dialog.grab_set()
+        dialog.configure(background=BG)
         form = ttk.Frame(dialog, padding=12)
         form.pack()
         uses_parts = [f"{eng.ing_name(self.data, li['ingredientId'])} x{li['qty']:g}" for li in r["ingredients"]]
         ttk.Label(form, text=f"How many times did you craft \"{r['name']}\"?").grid(row=0, column=0, columnspan=2, sticky="w")
         ttk.Label(form, text="(each craft uses: " + ", ".join(uses_parts) + ")",
-                  foreground="#666", wraplength=340, justify="left").grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 8))
+                  foreground=INK_DIM, wraplength=340, justify="left").grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 8))
         crafts_var = tk.StringVar(value=str(default_crafts))
         ttk.Entry(form, textvariable=crafts_var, width=8).grid(row=2, column=0, sticky="w")
 
@@ -929,9 +1017,9 @@ class LedgerApp(tk.Tk):
             if m["tier"] == "good" and not m["overCap"]:
                 continue
             flag = ("OVER CAP, " if m["overCap"] else "") + ("problematic" if m["tier"] == "bad" else "tight")
-            self.watch_tree.insert("", "end", values=(r["name"], eng.fmt_money(m["costPerItem"]), eng.fmt_money(r["salePrice"]), flag))
+            self.watch_tree.insert("", "end", values=(r["name"], eng.fmt_money(m["costPerItem"]), eng.fmt_money(r["salePrice"]), flag),
+                                    tags=(f"tier_{m['tier']}",))
         stripe_tree(self.grow_tree)
-        stripe_tree(self.watch_tree)
 
     def _refresh_recipes(self):
         self.recipes_tree.delete(*self.recipes_tree.get_children())
@@ -944,8 +1032,7 @@ class LedgerApp(tk.Tk):
                 name, r["category"], r["yieldQty"], eng.fmt_money(m["craft"]["total"]), eng.fmt_money(m["costPerItem"]),
                 eng.fmt_money(r["salePrice"]) + (" (over cap)" if m["overCap"] else ""), eng.fmt_money(m["profit"]),
                 margin, tier, "Yes" if r["active"] else "No",
-            ))
-        stripe_tree(self.recipes_tree)
+            ), tags=(f"tier_{m['tier']}",))
 
     def _refresh_ingredients(self):
         self.ing_tree.delete(*self.ing_tree.get_children())
