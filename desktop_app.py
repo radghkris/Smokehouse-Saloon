@@ -1,0 +1,888 @@
+import tkinter as tk
+from tkinter import ttk, messagebox
+
+import ledger_engine as eng
+
+MONEY_COLS_HELP = "Double-click a row where noted to edit it."
+
+
+def center(win, parent):
+    win.update_idletasks()
+    w, h = win.winfo_width(), win.winfo_height()
+    x = parent.winfo_x() + (parent.winfo_width() - w) // 2
+    y = parent.winfo_y() + (parent.winfo_height() - h) // 2
+    win.geometry(f"+{max(x,0)}+{max(y,0)}")
+
+
+def make_tree(parent, columns, widths=None, height=10):
+    frame = ttk.Frame(parent)
+    tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="browse", height=height)
+    for c in columns:
+        tree.heading(c, text=c)
+        tree.column(c, width=(widths or {}).get(c, 110), anchor="w", stretch=True)
+    vsb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+    hsb = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
+    tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+    tree.grid(row=0, column=0, sticky="nsew")
+    vsb.grid(row=0, column=1, sticky="ns")
+    hsb.grid(row=1, column=0, sticky="ew")
+    frame.rowconfigure(0, weight=1)
+    frame.columnconfigure(0, weight=1)
+    return frame, tree
+
+
+class IngredientLinesEditor(ttk.Frame):
+    """A small editable list of (ingredient, qty) rows used inside the recipe dialog."""
+
+    def __init__(self, parent, ingredient_names, initial_lines):
+        super().__init__(parent)
+        self.ingredient_names = ingredient_names
+        self.rows = []
+        self.rows_frame = ttk.Frame(self)
+        self.rows_frame.pack(fill="x")
+        for name, qty in initial_lines:
+            self._add_row(name, qty)
+        if not initial_lines and ingredient_names:
+            self._add_row(ingredient_names[0], 1)
+        ttk.Button(self, text="+ ingredient line", command=lambda: self._add_row(ingredient_names[0] if ingredient_names else "", 1)).pack(anchor="w", pady=(4, 0))
+
+    def _add_row(self, name, qty):
+        row = ttk.Frame(self.rows_frame)
+        row.pack(fill="x", pady=2)
+        combo = ttk.Combobox(row, values=self.ingredient_names, state="readonly", width=24)
+        combo.set(name)
+        combo.pack(side="left", padx=(0, 6))
+        qty_var = tk.StringVar(value=str(qty))
+        qty_entry = ttk.Entry(row, textvariable=qty_var, width=8)
+        qty_entry.pack(side="left", padx=(0, 6))
+        entry = {"frame": row, "combo": combo, "qty_var": qty_var}
+        remove_btn = ttk.Button(row, text="✖", width=3, command=lambda: self._remove_row(entry))
+        remove_btn.pack(side="left")
+        self.rows.append(entry)
+
+    def _remove_row(self, entry):
+        entry["frame"].destroy()
+        self.rows.remove(entry)
+
+    def get_lines(self, name_to_id):
+        out = []
+        for e in self.rows:
+            name = e["combo"].get()
+            try:
+                qty = float(e["qty_var"].get())
+            except ValueError:
+                qty = 0
+            if name in name_to_id and qty > 0:
+                out.append({"ingredientId": name_to_id[name], "qty": qty})
+        return out
+
+
+class RecipeDialog(tk.Toplevel):
+    def __init__(self, app, recipe_id=None):
+        super().__init__(app)
+        self.app = app
+        self.recipe_id = recipe_id
+        self.existing = app.data["recipes"].get(recipe_id) if recipe_id else None
+        self.title("Edit Recipe" if self.existing else "Add Recipe")
+        self.resizable(False, False)
+        self.transient(app)
+        self.grab_set()
+
+        ids_sorted = sorted(app.data["ingredients"], key=lambda i: app.data["ingredients"][i]["name"])
+        self.name_to_id = {app.data["ingredients"][i]["name"]: i for i in ids_sorted}
+        names_sorted = [app.data["ingredients"][i]["name"] for i in ids_sorted]
+
+        form = ttk.Frame(self, padding=12)
+        form.pack(fill="both", expand=True)
+
+        ttk.Label(form, text="Name").grid(row=0, column=0, sticky="w")
+        self.name_var = tk.StringVar(value=self.existing["name"] if self.existing else "")
+        ttk.Entry(form, textvariable=self.name_var, width=36).grid(row=0, column=1, columnspan=3, sticky="we", pady=2)
+
+        ttk.Label(form, text="Category").grid(row=1, column=0, sticky="w")
+        self.cat_var = tk.StringVar(value=self.existing["category"] if self.existing else "food")
+        ttk.Combobox(form, textvariable=self.cat_var, values=["food", "drink"], state="readonly", width=10).grid(row=1, column=1, sticky="w", pady=2)
+
+        ttk.Label(form, text="Yield / craft").grid(row=1, column=2, sticky="w")
+        self.yield_var = tk.StringVar(value=str(self.existing["yieldQty"]) if self.existing else "1")
+        ttk.Entry(form, textvariable=self.yield_var, width=8).grid(row=1, column=3, sticky="w", pady=2)
+
+        ttk.Label(form, text="Sale price").grid(row=2, column=0, sticky="w")
+        self.price_var = tk.StringVar(value=str(self.existing["salePrice"]) if self.existing else str(app.data["settings"]["priceCap"]))
+        ttk.Entry(form, textvariable=self.price_var, width=8).grid(row=2, column=1, sticky="w", pady=2)
+
+        self.active_var = tk.BooleanVar(value=self.existing["active"] if self.existing else True)
+        ttk.Checkbutton(form, text="Active (included in planner by default)", variable=self.active_var).grid(row=2, column=2, columnspan=2, sticky="w")
+
+        ttk.Label(form, text="Ingredients").grid(row=3, column=0, sticky="nw", pady=(8, 0))
+        initial_lines = [(eng.ing_name(app.data, l["ingredientId"]), l["qty"]) for l in self.existing["ingredients"]] if self.existing else []
+        self.lines_editor = IngredientLinesEditor(form, names_sorted, initial_lines)
+        self.lines_editor.grid(row=3, column=1, columnspan=3, sticky="we", pady=(8, 0))
+
+        btns = ttk.Frame(form)
+        btns.grid(row=4, column=0, columnspan=4, sticky="e", pady=(12, 0))
+        ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="left", padx=4)
+        ttk.Button(btns, text="Save", command=self._save).pack(side="left")
+
+        center(self, app)
+
+    def _save(self):
+        name = self.name_var.get().strip()
+        if not name:
+            messagebox.showerror("Missing name", "Name is required.", parent=self)
+            return
+        lines = self.lines_editor.get_lines(self.name_to_id)
+        if not lines:
+            messagebox.showerror("Missing ingredients", "Add at least one ingredient.", parent=self)
+            return
+        try:
+            yield_qty = max(1, int(float(self.yield_var.get())))
+            sale_price = max(0.0, float(self.price_var.get()))
+        except ValueError:
+            messagebox.showerror("Invalid number", "Yield and sale price must be numbers.", parent=self)
+            return
+        payload = {"name": name, "category": self.cat_var.get(), "yieldQty": yield_qty,
+                   "salePrice": sale_price, "active": self.active_var.get(), "ingredients": lines}
+        data = self.app.data
+        if self.recipe_id:
+            data["recipes"][self.recipe_id] = payload
+        else:
+            new_id = eng.unique_id(eng.slugify(name), set(data["recipes"]))
+            data["recipes"][new_id] = payload
+            data["plan"]["targets"][new_id] = {"enabled": payload["active"], "qty": 100}
+        eng.save_data(data)
+        self.app.refresh_all()
+        self.destroy()
+
+
+class IngredientDialog(tk.Toplevel):
+    def __init__(self, app, ing_id=None):
+        super().__init__(app)
+        self.app = app
+        self.ing_id = ing_id
+        existing = app.data["ingredients"].get(ing_id) if ing_id else None
+        self.title("Edit Ingredient" if existing else "Add Ingredient")
+        self.resizable(False, False)
+        self.transient(app)
+        self.grab_set()
+
+        form = ttk.Frame(self, padding=12)
+        form.pack()
+        ttk.Label(form, text="Name").grid(row=0, column=0, sticky="w")
+        self.name_var = tk.StringVar(value=existing["name"] if existing else "")
+        ttk.Entry(form, textvariable=self.name_var, width=28).grid(row=0, column=1, pady=2)
+        ttk.Label(form, text="Unit").grid(row=1, column=0, sticky="w")
+        self.unit_var = tk.StringVar(value=existing["unit"] if existing else "ea")
+        ttk.Entry(form, textvariable=self.unit_var, width=28).grid(row=1, column=1, pady=2)
+
+        btns = ttk.Frame(form)
+        btns.grid(row=2, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="left", padx=4)
+        ttk.Button(btns, text="Save", command=self._save).pack(side="left")
+        center(self, app)
+
+    def _save(self):
+        name = self.name_var.get().strip()
+        if not name:
+            messagebox.showerror("Missing name", "Name is required.", parent=self)
+            return
+        unit = self.unit_var.get().strip() or "ea"
+        data = self.app.data
+        if self.ing_id:
+            data["ingredients"][self.ing_id]["name"] = name
+            data["ingredients"][self.ing_id]["unit"] = unit
+        else:
+            new_id = eng.unique_id(eng.slugify(name), set(data["ingredients"]))
+            data["ingredients"][new_id] = {"name": name, "unit": unit}
+            data["inventory"][new_id] = {"qty": 0, "preferredVendorId": None}
+        eng.save_data(data)
+        self.app.refresh_all()
+        self.destroy()
+
+
+class ConversionDialog(tk.Toplevel):
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self.title("Add Conversion")
+        self.resizable(False, False)
+        self.transient(app)
+        self.grab_set()
+
+        ids_sorted = sorted(app.data["ingredients"], key=lambda i: app.data["ingredients"][i]["name"])
+        self.name_to_id = {app.data["ingredients"][i]["name"]: i for i in ids_sorted}
+        names_sorted = [app.data["ingredients"][i]["name"] for i in ids_sorted]
+
+        form = ttk.Frame(self, padding=12)
+        form.pack()
+        ttk.Label(form, text="Input ingredient").grid(row=0, column=0, sticky="w")
+        self.in_var = tk.StringVar(value=names_sorted[0] if names_sorted else "")
+        ttk.Combobox(form, textvariable=self.in_var, values=names_sorted, state="readonly", width=22).grid(row=0, column=1, pady=2)
+        ttk.Label(form, text="Input qty").grid(row=0, column=2, sticky="w")
+        self.in_qty_var = tk.StringVar(value="1")
+        ttk.Entry(form, textvariable=self.in_qty_var, width=8).grid(row=0, column=3, pady=2)
+
+        ttk.Label(form, text="Output ingredient").grid(row=1, column=0, sticky="w")
+        self.out_var = tk.StringVar(value=names_sorted[0] if names_sorted else "")
+        ttk.Combobox(form, textvariable=self.out_var, values=names_sorted, state="readonly", width=22).grid(row=1, column=1, pady=2)
+        ttk.Label(form, text="Output qty").grid(row=1, column=2, sticky="w")
+        self.out_qty_var = tk.StringVar(value="1")
+        ttk.Entry(form, textvariable=self.out_qty_var, width=8).grid(row=1, column=3, pady=2)
+
+        ttk.Label(form, text="Processing cost (total, optional)").grid(row=2, column=0, columnspan=2, sticky="w")
+        self.cost_var = tk.StringVar(value="0")
+        ttk.Entry(form, textvariable=self.cost_var, width=8).grid(row=2, column=2, pady=2)
+
+        btns = ttk.Frame(form)
+        btns.grid(row=3, column=0, columnspan=4, sticky="e", pady=(10, 0))
+        ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="left", padx=4)
+        ttk.Button(btns, text="Save", command=self._save).pack(side="left")
+        center(self, app)
+
+    def _save(self):
+        in_id = self.name_to_id.get(self.in_var.get())
+        out_id = self.name_to_id.get(self.out_var.get())
+        if not in_id or not out_id or in_id == out_id:
+            messagebox.showerror("Invalid", "Pick two different ingredients.", parent=self)
+            return
+        try:
+            in_qty = float(self.in_qty_var.get())
+            out_qty = float(self.out_qty_var.get())
+            cost = float(self.cost_var.get() or 0)
+        except ValueError:
+            messagebox.showerror("Invalid number", "Quantities and cost must be numbers.", parent=self)
+            return
+        if in_qty <= 0 or out_qty <= 0:
+            messagebox.showerror("Invalid", "Quantities must be greater than zero.", parent=self)
+            return
+        data = self.app.data
+        new_id = "conv-" + eng.slugify(f"{in_id}-{out_id}-{len(data['conversions'])}")
+        data["conversions"].append({"id": new_id, "inputId": in_id, "inputQty": in_qty,
+                                     "outputId": out_id, "outputQty": out_qty, "cost": cost})
+        eng.save_data(data)
+        self.app.refresh_all()
+        self.destroy()
+
+
+class VendorDialog(tk.Toplevel):
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self.title("Add Vendor Price")
+        self.resizable(False, False)
+        self.transient(app)
+        self.grab_set()
+
+        ids_sorted = sorted(app.data["ingredients"], key=lambda i: app.data["ingredients"][i]["name"])
+        self.name_to_id = {app.data["ingredients"][i]["name"]: i for i in ids_sorted}
+        names_sorted = [app.data["ingredients"][i]["name"] for i in ids_sorted]
+
+        form = ttk.Frame(self, padding=12)
+        form.pack()
+        ttk.Label(form, text="Ingredient").grid(row=0, column=0, sticky="w")
+        self.ing_var = tk.StringVar(value=names_sorted[0] if names_sorted else "")
+        ttk.Combobox(form, textvariable=self.ing_var, values=names_sorted, state="readonly", width=24).grid(row=0, column=1, columnspan=2, pady=2, sticky="w")
+
+        ttk.Label(form, text="Vendor name").grid(row=1, column=0, sticky="w")
+        self.vendor_var = tk.StringVar()
+        ttk.Entry(form, textvariable=self.vendor_var, width=26).grid(row=1, column=1, columnspan=2, pady=2, sticky="w")
+
+        ttk.Label(form, text="Town").grid(row=2, column=0, sticky="w")
+        self.town_var = tk.StringVar()
+        ttk.Entry(form, textvariable=self.town_var, width=26).grid(row=2, column=1, columnspan=2, pady=2, sticky="w")
+
+        ttk.Label(form, text="Price (blank = TBD)").grid(row=3, column=0, sticky="w")
+        self.price_var = tk.StringVar()
+        ttk.Entry(form, textvariable=self.price_var, width=10).grid(row=3, column=1, pady=2, sticky="w")
+
+        ttk.Label(form, text="Stock").grid(row=4, column=0, sticky="w")
+        self.stock_var = tk.StringVar(value="unknown")
+        ttk.Combobox(form, textvariable=self.stock_var, values=["unknown", "available", "out"], state="readonly", width=12).grid(row=4, column=1, pady=2, sticky="w")
+
+        btns = ttk.Frame(form)
+        btns.grid(row=5, column=0, columnspan=3, sticky="e", pady=(10, 0))
+        ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="left", padx=4)
+        ttk.Button(btns, text="Save", command=self._save).pack(side="left")
+        center(self, app)
+
+    def _save(self):
+        vendor_name = self.vendor_var.get().strip()
+        if not vendor_name:
+            messagebox.showerror("Missing name", "Vendor name is required.", parent=self)
+            return
+        price_raw = self.price_var.get().strip()
+        try:
+            price = None if not price_raw else max(0.0, float(price_raw))
+        except ValueError:
+            messagebox.showerror("Invalid price", "Price must be a number, or blank for TBD.", parent=self)
+            return
+        data = self.app.data
+        new_id = "v-" + eng.slugify(f"{vendor_name}-{len(data['vendors'])}")
+        data["vendors"].append({"id": new_id, "ingredientId": self.name_to_id[self.ing_var.get()],
+                                 "vendorName": vendor_name, "town": self.town_var.get().strip(),
+                                 "price": price, "stock": self.stock_var.get()})
+        eng.save_data(data)
+        self.app.refresh_all()
+        self.destroy()
+
+
+class InventoryDialog(tk.Toplevel):
+    def __init__(self, app, ing_id):
+        super().__init__(app)
+        self.app = app
+        self.ing_id = ing_id
+        ing = app.data["ingredients"][ing_id]
+        self.title(f"Edit Inventory — {ing['name']}")
+        self.resizable(False, False)
+        self.transient(app)
+        self.grab_set()
+
+        inv = app.data["inventory"].get(ing_id, {"qty": 0, "preferredVendorId": None})
+        vendors_here = [v for v in app.data["vendors"] if v["ingredientId"] == ing_id]
+        self.vendor_options = ["cheapest available"] + [
+            v["vendorName"] + (f" ({eng.fmt_money(v['price'])})" if v.get("price") is not None else " (TBD)") for v in vendors_here
+        ]
+        self.vendor_ids = [None] + [v["id"] for v in vendors_here]
+        current_idx = 0
+        if inv.get("preferredVendorId") in self.vendor_ids:
+            current_idx = self.vendor_ids.index(inv["preferredVendorId"])
+
+        form = ttk.Frame(self, padding=12)
+        form.pack()
+        ttk.Label(form, text="On hand").grid(row=0, column=0, sticky="w")
+        self.qty_var = tk.StringVar(value=str(inv.get("qty", 0)))
+        ttk.Entry(form, textvariable=self.qty_var, width=12).grid(row=0, column=1, pady=2)
+
+        ttk.Label(form, text="Preferred source").grid(row=1, column=0, sticky="w")
+        self.pref_var = tk.StringVar(value=self.vendor_options[current_idx])
+        ttk.Combobox(form, textvariable=self.pref_var, values=self.vendor_options, state="readonly", width=26).grid(row=1, column=1, pady=2)
+
+        btns = ttk.Frame(form)
+        btns.grid(row=2, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="left", padx=4)
+        ttk.Button(btns, text="Save", command=self._save).pack(side="left")
+        center(self, app)
+
+    def _save(self):
+        try:
+            qty = max(0.0, float(self.qty_var.get()))
+        except ValueError:
+            messagebox.showerror("Invalid number", "On hand must be a number.", parent=self)
+            return
+        idx = self.vendor_options.index(self.pref_var.get())
+        pref_id = self.vendor_ids[idx]
+        self.app.data["inventory"][self.ing_id] = {"qty": qty, "preferredVendorId": pref_id}
+        eng.save_data(self.app.data)
+        self.app.refresh_all()
+        self.destroy()
+
+
+class TargetDialog(tk.Toplevel):
+    def __init__(self, app, recipe_id):
+        super().__init__(app)
+        self.app = app
+        self.recipe_id = recipe_id
+        r = app.data["recipes"][recipe_id]
+        self.title(f"Target — {r['name']}")
+        self.resizable(False, False)
+        self.transient(app)
+        self.grab_set()
+
+        t = app.data["plan"]["targets"].get(recipe_id, {"enabled": False, "qty": 0})
+        form = ttk.Frame(self, padding=12)
+        form.pack()
+        ttk.Label(form, text="Target quantity").grid(row=0, column=0, sticky="w")
+        self.qty_var = tk.StringVar(value=str(t.get("qty", 0)))
+        ttk.Entry(form, textvariable=self.qty_var, width=10).grid(row=0, column=1, pady=2)
+
+        btns = ttk.Frame(form)
+        btns.grid(row=1, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="left", padx=4)
+        ttk.Button(btns, text="Save", command=self._save).pack(side="left")
+        center(self, app)
+
+    def _save(self):
+        try:
+            qty = max(0.0, float(self.qty_var.get()))
+        except ValueError:
+            messagebox.showerror("Invalid number", "Target quantity must be a number.", parent=self)
+            return
+        cur = self.app.data["plan"]["targets"].get(self.recipe_id, {"enabled": False, "qty": 0})
+        self.app.data["plan"]["targets"][self.recipe_id] = {"enabled": cur.get("enabled", False), "qty": qty}
+        eng.save_data(self.app.data)
+        self.app.refresh_all()
+        self.destroy()
+
+
+class SettingsFrame(ttk.Frame):
+    def __init__(self, parent, app):
+        super().__init__(parent, padding=12)
+        self.app = app
+        s = app.data["settings"]
+
+        pricing = ttk.LabelFrame(self, text="Pricing Rules", padding=10)
+        pricing.pack(fill="x", pady=(0, 10))
+        ttk.Label(pricing, text="Server price cap").grid(row=0, column=0, sticky="w")
+        self.cap_var = tk.StringVar(value=str(s["priceCap"]))
+        ttk.Entry(pricing, textvariable=self.cap_var, width=10).grid(row=0, column=1, padx=6)
+        ttk.Label(pricing, text="Healthy threshold (cost below)").grid(row=1, column=0, sticky="w")
+        self.healthy_var = tk.StringVar(value=str(s["thresholdHealthy"]))
+        ttk.Entry(pricing, textvariable=self.healthy_var, width=10).grid(row=1, column=1, padx=6)
+        ttk.Label(pricing, text="Problematic threshold (cost above)").grid(row=2, column=0, sticky="w")
+        self.tight_var = tk.StringVar(value=str(s["thresholdTight"]))
+        ttk.Entry(pricing, textvariable=self.tight_var, width=10).grid(row=2, column=1, padx=6)
+        ttk.Button(pricing, text="Save pricing rules", command=self._save_pricing).grid(row=3, column=0, pady=(8, 0), sticky="w")
+
+        meat = ttk.LabelFrame(self, text="Meat Processing", padding=10)
+        meat.pack(fill="x")
+        ttk.Label(meat, text="Prepared Meat Cut is priced specially. Choose calculated (raw + fee) or a flat override.", wraplength=420, justify="left").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        self.mode_var = tk.StringVar(value=s["meatMode"])
+        ttk.Radiobutton(meat, text="Manual override", variable=self.mode_var, value="override").grid(row=1, column=0, sticky="w")
+        ttk.Radiobutton(meat, text="Calculated (raw + processing fee)", variable=self.mode_var, value="calculated").grid(row=1, column=1, sticky="w")
+        ttk.Label(meat, text="Raw cost/unit").grid(row=2, column=0, sticky="w")
+        self.raw_var = tk.StringVar(value=str(s["meatRawCost"]))
+        ttk.Entry(meat, textvariable=self.raw_var, width=10).grid(row=2, column=1, sticky="w")
+        ttk.Label(meat, text="Processing fee/unit").grid(row=3, column=0, sticky="w")
+        self.fee_var = tk.StringVar(value=str(s["meatProcessingFee"]))
+        ttk.Entry(meat, textvariable=self.fee_var, width=10).grid(row=3, column=1, sticky="w")
+        ttk.Label(meat, text="Override cost/unit").grid(row=4, column=0, sticky="w")
+        self.override_var = tk.StringVar(value=str(s["meatOverrideCost"]))
+        ttk.Entry(meat, textvariable=self.override_var, width=10).grid(row=4, column=1, sticky="w")
+        ttk.Button(meat, text="Save meat settings", command=self._save_meat).grid(row=5, column=0, pady=(8, 0), sticky="w")
+        ttk.Label(meat, text="The special first batch (594 cuts for a flat $10 fee) is a one-off — it isn't used as the ongoing basis.", wraplength=420, justify="left", foreground="#666").grid(row=6, column=0, columnspan=2, sticky="w", pady=(8, 0))
+
+    def _save_pricing(self):
+        try:
+            cap = float(self.cap_var.get())
+            healthy = float(self.healthy_var.get())
+            tight = float(self.tight_var.get())
+        except ValueError:
+            messagebox.showerror("Invalid number", "Pricing fields must be numbers.")
+            return
+        s = self.app.data["settings"]
+        s["priceCap"], s["thresholdHealthy"], s["thresholdTight"] = cap, healthy, tight
+        eng.save_data(self.app.data)
+        self.app.refresh_all()
+        messagebox.showinfo("Saved", "Pricing rules saved.")
+
+    def _save_meat(self):
+        try:
+            raw = float(self.raw_var.get())
+            fee = float(self.fee_var.get())
+            override = float(self.override_var.get())
+        except ValueError:
+            messagebox.showerror("Invalid number", "Meat cost fields must be numbers.")
+            return
+        s = self.app.data["settings"]
+        s["meatMode"], s["meatRawCost"], s["meatProcessingFee"], s["meatOverrideCost"] = self.mode_var.get(), raw, fee, override
+        eng.save_data(self.app.data)
+        self.app.refresh_all()
+        messagebox.showinfo("Saved", "Meat settings saved.")
+
+
+class LedgerApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Blackwater Ledger")
+        self.geometry("1180x720")
+        self.minsize(900, 600)
+        self.data = eng.load_data()
+
+        style = ttk.Style(self)
+        try:
+            style.theme_use("vista")
+        except tk.TclError:
+            pass
+
+        header = ttk.Frame(self, padding=(12, 10, 12, 4))
+        header.pack(fill="x")
+        ttk.Label(header, text="\U0001F356 Blackwater Ledger", font=("Segoe UI", 16, "bold")).pack(side="left")
+        ttk.Label(header, text="  The Smokehouse at Blackwater Saloon — data saves to ledger_data.json", foreground="#666").pack(side="left")
+
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(fill="both", expand=True, padx=8, pady=8)
+
+        self.tab_dash = ttk.Frame(self.notebook)
+        self.tab_recipes = ttk.Frame(self.notebook)
+        self.tab_ing = ttk.Frame(self.notebook)
+        self.tab_vendors = ttk.Frame(self.notebook)
+        self.tab_inv = ttk.Frame(self.notebook)
+        self.tab_planner = ttk.Frame(self.notebook)
+        self.tab_settings = ttk.Frame(self.notebook)
+        for frame, label in [
+            (self.tab_dash, "Dashboard"), (self.tab_recipes, "Recipes"), (self.tab_ing, "Ingredients"),
+            (self.tab_vendors, "Vendors"), (self.tab_inv, "Inventory"), (self.tab_planner, "Planner"),
+            (self.tab_settings, "Settings"),
+        ]:
+            self.notebook.add(frame, text=label)
+
+        self._build_dashboard()
+        self._build_recipes()
+        self._build_ingredients()
+        self._build_vendors()
+        self._build_inventory()
+        self._build_planner()
+        self.settings_frame = SettingsFrame(self.tab_settings, self)
+        self.settings_frame.pack(fill="both", expand=True)
+
+        self.refresh_all()
+
+    # ---------- Dashboard ----------
+    def _build_dashboard(self):
+        top = ttk.Frame(self.tab_dash, padding=10)
+        top.pack(fill="x")
+        self.metric_vars = {k: tk.StringVar(value="—") for k in ["active", "short", "overcap", "problematic"]}
+        labels = [("active", "Active Recipes"), ("short", "Ingredients Short"), ("overcap", "Over Price Cap"), ("problematic", "Problematic Tier")]
+        for i, (key, label) in enumerate(labels):
+            box = ttk.LabelFrame(top, text=label, padding=10)
+            box.grid(row=0, column=i, padx=6, sticky="ew")
+            top.columnconfigure(i, weight=1)
+            ttk.Label(box, textvariable=self.metric_vars[key], font=("Segoe UI", 18, "bold")).pack()
+
+        mid = ttk.Frame(self.tab_dash, padding=10)
+        mid.pack(fill="both", expand=True)
+        mid.columnconfigure(0, weight=1)
+        mid.columnconfigure(1, weight=1)
+        mid.rowconfigure(1, weight=1)
+
+        ttk.Label(mid, text="Grow Next", font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
+        grow_frame, self.grow_tree = make_tree(mid, ["Ingredient", "Shortage", "Recipes Using", "Score"],
+                                                {"Ingredient": 150}, height=8)
+        grow_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 6))
+
+        ttk.Label(mid, text="Pricing Watch", font=("Segoe UI", 11, "bold")).grid(row=0, column=1, sticky="w")
+        watch_frame, self.watch_tree = make_tree(mid, ["Recipe", "Cost/Item", "Sale Price", "Flag"],
+                                                  {"Recipe": 170}, height=8)
+        watch_frame.grid(row=1, column=1, sticky="nsew", padx=(6, 0))
+
+    # ---------- Recipes ----------
+    def _build_recipes(self):
+        top = ttk.Frame(self.tab_recipes, padding=(10, 10, 10, 0))
+        top.pack(fill="x")
+        ttk.Label(top, text="Double-click a recipe row to toggle Active on/off.", foreground="#666").pack(side="left")
+        ttk.Button(top, text="Add Recipe", command=lambda: RecipeDialog(self)).pack(side="right", padx=4)
+        ttk.Button(top, text="Edit Selected", command=self._edit_selected_recipe).pack(side="right", padx=4)
+        ttk.Button(top, text="Delete Selected", command=self._delete_selected_recipe).pack(side="right", padx=4)
+
+        cols = ["Name", "Category", "Yield", "Craft Cost", "Cost/Item", "Sale Price", "Profit", "Margin", "Tier", "Active"]
+        frame, self.recipes_tree = make_tree(self.tab_recipes, cols, {"Name": 200}, height=16)
+        frame.pack(fill="both", expand=True, padx=10, pady=10)
+        self.recipes_tree.bind("<Double-1>", self._toggle_recipe_active)
+
+    def _selected_recipe_id(self):
+        sel = self.recipes_tree.selection()
+        return sel[0] if sel else None
+
+    def _toggle_recipe_active(self, event):
+        row_id = self.recipes_tree.identify_row(event.y)
+        if not row_id:
+            return
+        r = self.data["recipes"].get(row_id)
+        if not r:
+            return
+        r["active"] = not r["active"]
+        eng.save_data(self.data)
+        self.refresh_all()
+
+    def _edit_selected_recipe(self):
+        rid = self._selected_recipe_id()
+        if not rid:
+            messagebox.showinfo("No selection", "Select a recipe first.")
+            return
+        RecipeDialog(self, rid)
+
+    def _delete_selected_recipe(self):
+        rid = self._selected_recipe_id()
+        if not rid:
+            messagebox.showinfo("No selection", "Select a recipe first.")
+            return
+        name = self.data["recipes"][rid]["name"]
+        if messagebox.askyesno("Delete recipe", f'Delete "{name}"?'):
+            del self.data["recipes"][rid]
+            eng.save_data(self.data)
+            self.refresh_all()
+
+    # ---------- Ingredients ----------
+    def _build_ingredients(self):
+        top = ttk.Frame(self.tab_ing, padding=(10, 10, 10, 0))
+        top.pack(fill="x")
+        ttk.Button(top, text="Add Ingredient", command=lambda: IngredientDialog(self)).pack(side="right", padx=4)
+        ttk.Button(top, text="Edit Selected", command=self._edit_selected_ingredient).pack(side="right", padx=4)
+        ttk.Button(top, text="Delete Selected", command=self._delete_selected_ingredient).pack(side="right", padx=4)
+
+        frame, self.ing_tree = make_tree(self.tab_ing, ["Name", "Unit", "Cost", "Source"], {"Name": 170}, height=10)
+        frame.pack(fill="both", expand=True, padx=10, pady=(6, 6))
+
+        conv_top = ttk.Frame(self.tab_ing, padding=(10, 4, 10, 0))
+        conv_top.pack(fill="x")
+        ttk.Label(conv_top, text="Conversions (e.g. Sugarcane → Sugar)", font=("Segoe UI", 10, "bold")).pack(side="left")
+        ttk.Button(conv_top, text="Add Conversion", command=lambda: ConversionDialog(self)).pack(side="right", padx=4)
+        ttk.Button(conv_top, text="Delete Selected", command=self._delete_selected_conversion).pack(side="right", padx=4)
+
+        conv_frame, self.conv_tree = make_tree(self.tab_ing, ["Conversion", "Processing Cost"], {"Conversion": 260}, height=6)
+        conv_frame.pack(fill="both", expand=True, padx=10, pady=(6, 10))
+
+    def _edit_selected_ingredient(self):
+        sel = self.ing_tree.selection()
+        if not sel:
+            messagebox.showinfo("No selection", "Select an ingredient first.")
+            return
+        IngredientDialog(self, sel[0])
+
+    def _delete_selected_ingredient(self):
+        sel = self.ing_tree.selection()
+        if not sel:
+            messagebox.showinfo("No selection", "Select an ingredient first.")
+            return
+        ing_id = sel[0]
+        blockers = eng.used_in_recipes(self.data, ing_id) + eng.used_in_conversions(self.data, ing_id)
+        if blockers:
+            messagebox.showerror("Can't delete", f"\"{eng.ing_name(self.data, ing_id)}\" is still used in {len(blockers)} recipe(s)/conversion(s). Remove those first.")
+            return
+        if messagebox.askyesno("Delete ingredient", "Delete this ingredient and its vendor prices?"):
+            self.data["vendors"] = [v for v in self.data["vendors"] if v["ingredientId"] != ing_id]
+            self.data["inventory"].pop(ing_id, None)
+            del self.data["ingredients"][ing_id]
+            eng.save_data(self.data)
+            self.refresh_all()
+
+    def _delete_selected_conversion(self):
+        sel = self.conv_tree.selection()
+        if not sel:
+            messagebox.showinfo("No selection", "Select a conversion first.")
+            return
+        if messagebox.askyesno("Delete conversion", "Delete this conversion?"):
+            self.data["conversions"] = [c for c in self.data["conversions"] if c["id"] != sel[0]]
+            eng.save_data(self.data)
+            self.refresh_all()
+
+    # ---------- Vendors ----------
+    def _build_vendors(self):
+        top = ttk.Frame(self.tab_vendors, padding=(10, 10, 10, 0))
+        top.pack(fill="x")
+        ttk.Label(top, text="Cheapest known price is marked automatically.", foreground="#666").pack(side="left")
+        ttk.Button(top, text="Add Vendor Price", command=lambda: VendorDialog(self)).pack(side="right", padx=4)
+        ttk.Button(top, text="Delete Selected", command=self._delete_selected_vendor).pack(side="right", padx=4)
+
+        frame, self.vendor_tree = make_tree(
+            self.tab_vendors, ["Ingredient", "Vendor", "Town", "Price", "Stock", "Note"],
+            {"Ingredient": 140, "Vendor": 150, "Note": 220}, height=18,
+        )
+        frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+    def _delete_selected_vendor(self):
+        sel = self.vendor_tree.selection()
+        if not sel:
+            messagebox.showinfo("No selection", "Select a vendor row first.")
+            return
+        vendor_id = sel[0]
+        if messagebox.askyesno("Delete vendor price", "Delete this vendor price?"):
+            v = next((x for x in self.data["vendors"] if x["id"] == vendor_id), None)
+            self.data["vendors"] = [x for x in self.data["vendors"] if x["id"] != vendor_id]
+            if v:
+                inv = self.data["inventory"].get(v["ingredientId"])
+                if inv and inv.get("preferredVendorId") == vendor_id:
+                    inv["preferredVendorId"] = None
+            eng.save_data(self.data)
+            self.refresh_all()
+
+    # ---------- Inventory ----------
+    def _build_inventory(self):
+        top = ttk.Frame(self.tab_inv, padding=(10, 10, 10, 0))
+        top.pack(fill="x")
+        ttk.Label(top, text="Double-click a row to set quantity on hand and preferred supplier.", foreground="#666").pack(side="left")
+        self.inv_total_var = tk.StringVar(value="Total value: —")
+        ttk.Label(top, textvariable=self.inv_total_var, font=("Segoe UI", 10, "bold")).pack(side="right")
+
+        frame, self.inv_tree = make_tree(
+            self.tab_inv, ["Ingredient", "Unit", "On Hand", "Preferred Source", "Unit Cost", "Value"],
+            {"Ingredient": 170, "Preferred Source": 170}, height=18,
+        )
+        frame.pack(fill="both", expand=True, padx=10, pady=10)
+        self.inv_tree.bind("<Double-1>", self._open_inventory_dialog)
+
+    def _open_inventory_dialog(self, event):
+        row_id = self.inv_tree.identify_row(event.y)
+        if row_id:
+            InventoryDialog(self, row_id)
+
+    # ---------- Planner ----------
+    def _build_planner(self):
+        top = ttk.Frame(self.tab_planner, padding=(10, 10, 10, 0))
+        top.pack(fill="x")
+        ttk.Label(top, text="Double-click a row to toggle Enabled, or edit its Target Qty:").pack(side="left")
+        self.bulk_qty_var = tk.StringVar(value="100")
+        ttk.Entry(top, textvariable=self.bulk_qty_var, width=8).pack(side="left", padx=(10, 4))
+        ttk.Button(top, text="Set target for all enabled", command=self._bulk_apply).pack(side="left")
+
+        plan_frame, self.plan_tree = make_tree(
+            self.tab_planner, ["Enabled", "Recipe", "Target Qty", "Crafts Needed", "Run Cost"],
+            {"Recipe": 180}, height=10,
+        )
+        plan_frame.pack(fill="both", expand=True, padx=10, pady=(6, 6))
+        self.plan_tree.bind("<Double-1>", self._planner_row_click)
+
+        order_label = ttk.Frame(self.tab_planner, padding=(10, 4, 10, 0))
+        order_label.pack(fill="x")
+        ttk.Label(order_label, text="What To Order", font=("Segoe UI", 11, "bold")).pack(side="left")
+        self.order_total_var = tk.StringVar(value="")
+        ttk.Label(order_label, textvariable=self.order_total_var, foreground="#666").pack(side="left", padx=10)
+
+        order_frame, self.order_tree = make_tree(
+            self.tab_planner, ["Ingredient", "Short", "Do This"], {"Ingredient": 140, "Do This": 420}, height=10,
+        )
+        order_frame.pack(fill="both", expand=True, padx=10, pady=(4, 10))
+
+    def _planner_row_click(self, event):
+        row_id = self.plan_tree.identify_row(event.y)
+        if not row_id:
+            return
+        col = self.plan_tree.identify_column(event.x)
+        if col == "#1":  # Enabled column
+            t = self.data["plan"]["targets"].get(row_id, {"enabled": False, "qty": 0})
+            t["enabled"] = not t.get("enabled", False)
+            self.data["plan"]["targets"][row_id] = t
+            eng.save_data(self.data)
+            self.refresh_all()
+        else:
+            TargetDialog(self, row_id)
+
+    def _bulk_apply(self):
+        try:
+            qty = max(0.0, float(self.bulk_qty_var.get()))
+        except ValueError:
+            messagebox.showerror("Invalid number", "Target quantity must be a number.")
+            return
+        for rid, t in self.data["plan"]["targets"].items():
+            if t.get("enabled"):
+                t["qty"] = qty
+        eng.save_data(self.data)
+        self.refresh_all()
+
+    # ---------- refresh ----------
+    def refresh_all(self):
+        self._refresh_dashboard()
+        self._refresh_recipes()
+        self._refresh_ingredients()
+        self._refresh_vendors()
+        self._refresh_inventory()
+        self._refresh_planner()
+
+    def _refresh_dashboard(self):
+        recipes = list(self.data["recipes"].items())
+        metrics = {rid: eng.recipe_metrics(self.data, r) for rid, r in recipes}
+        active_n = sum(1 for _, r in recipes if r["active"])
+        over_cap = sum(1 for rid, _ in recipes if metrics[rid]["overCap"])
+        problematic = sum(1 for rid, _ in recipes if metrics[rid]["tier"] == "bad")
+        plan = eng.compute_plan(self.data)
+        short_lines = sum(1 for s in plan["shortages"] if s["shortage"] > 0)
+
+        self.metric_vars["active"].set(f"{active_n} / {len(recipes)}")
+        self.metric_vars["short"].set(str(short_lines))
+        self.metric_vars["overcap"].set(str(over_cap))
+        self.metric_vars["problematic"].set(str(problematic))
+
+        self.grow_tree.delete(*self.grow_tree.get_children())
+        for g in plan["growNext"]:
+            self.grow_tree.insert("", "end", values=(eng.ing_name(self.data, g["id"]), int(g["shortage"]), g["numRecipes"], int(g["score"])))
+
+        self.watch_tree.delete(*self.watch_tree.get_children())
+        for rid, r in recipes:
+            m = metrics[rid]
+            if m["tier"] == "good" and not m["overCap"]:
+                continue
+            flag = ("OVER CAP, " if m["overCap"] else "") + ("problematic" if m["tier"] == "bad" else "tight")
+            self.watch_tree.insert("", "end", values=(r["name"], eng.fmt_money(m["costPerItem"]), eng.fmt_money(r["salePrice"]), flag))
+
+    def _refresh_recipes(self):
+        self.recipes_tree.delete(*self.recipes_tree.get_children())
+        for rid, r in sorted(self.data["recipes"].items(), key=lambda kv: kv[1]["name"]):
+            m = eng.recipe_metrics(self.data, r)
+            margin = "—" if m["margin"] is None else f"{m['margin']*100:.1f}%"
+            tier = {"good": "healthy", "warn": "tight", "bad": "problematic"}[m["tier"]]
+            name = r["name"] + (" ⚠️" if m["craft"]["warn"] else "")
+            self.recipes_tree.insert("", "end", iid=rid, values=(
+                name, r["category"], r["yieldQty"], eng.fmt_money(m["craft"]["total"]), eng.fmt_money(m["costPerItem"]),
+                eng.fmt_money(r["salePrice"]) + (" (over cap)" if m["overCap"] else ""), eng.fmt_money(m["profit"]),
+                margin, tier, "Yes" if r["active"] else "No",
+            ))
+
+    def _refresh_ingredients(self):
+        self.ing_tree.delete(*self.ing_tree.get_children())
+        reason_map = {"conversion": "via conversion", "vendor": "vendor", "override": "meat override",
+                      "calculated": "meat calc.", "no-price": "no data", "circular": "circular!"}
+        for iid in sorted(self.data["ingredients"], key=lambda i: self.data["ingredients"][i]["name"]):
+            ing = self.data["ingredients"][iid]
+            res = eng.ing_cost(self.data, iid)
+            cost_txt = "NO PRICE" if res["warn"] else eng.fmt_money(res["cost"])
+            self.ing_tree.insert("", "end", iid=iid, values=(ing["name"], ing["unit"], cost_txt, reason_map.get(res["reason"], res["reason"])))
+
+        self.conv_tree.delete(*self.conv_tree.get_children())
+        for c in self.data["conversions"]:
+            desc = f"{c['inputQty']:g}× {eng.ing_name(self.data, c['inputId'])} → {c['outputQty']:g}× {eng.ing_name(self.data, c['outputId'])}"
+            self.conv_tree.insert("", "end", iid=c["id"], values=(desc, eng.fmt_money(c.get("cost") or 0)))
+
+    def _refresh_vendors(self):
+        self.vendor_tree.delete(*self.vendor_tree.get_children())
+        for iid in sorted(self.data["ingredients"], key=lambda i: self.data["ingredients"][i]["name"]):
+            cheap = eng.cheapest_vendor(self.data, iid)
+            rows = sorted([v for v in self.data["vendors"] if v["ingredientId"] == iid],
+                          key=lambda v: (v["price"] is None, v.get("price") or 0))
+            for v in rows:
+                price_txt = "TBD" if v.get("price") is None else eng.fmt_money(v["price"])
+                if cheap and v["id"] == cheap["id"]:
+                    price_txt += " ★"
+                self.vendor_tree.insert("", "end", iid=v["id"], values=(
+                    self.data["ingredients"][iid]["name"], v["vendorName"], v.get("town") or "—",
+                    price_txt, v.get("stock", "unknown"), v.get("note", ""),
+                ))
+
+    def _refresh_inventory(self):
+        self.inv_tree.delete(*self.inv_tree.get_children())
+        total = 0.0
+        for iid in sorted(self.data["ingredients"], key=lambda i: self.data["ingredients"][i]["name"]):
+            ing = self.data["ingredients"][iid]
+            inv = self.data["inventory"].get(iid, {"qty": 0, "preferredVendorId": None})
+            res = eng.ing_cost(self.data, iid)
+            value = (inv.get("qty") or 0) * res["cost"]
+            total += value
+            pref_id = inv.get("preferredVendorId")
+            if pref_id:
+                v = next((x for x in self.data["vendors"] if x["id"] == pref_id), None)
+                pref_txt = v["vendorName"] if v else "cheapest available"
+            else:
+                pref_txt = "cheapest available"
+            self.inv_tree.insert("", "end", iid=iid, values=(
+                ing["name"], ing["unit"], f"{inv.get('qty', 0):g}", pref_txt,
+                "NO PRICE" if res["warn"] else eng.fmt_money(res["cost"]), eng.fmt_money(value),
+            ))
+        self.inv_total_var.set(f"Total value: {eng.fmt_money(total)}")
+
+    def _refresh_planner(self):
+        plan = eng.compute_plan(self.data)
+        run_by_id = {row["recipeId"]: row for row in plan["rows"]}
+        self.plan_tree.delete(*self.plan_tree.get_children())
+        for rid, r in sorted(self.data["recipes"].items(), key=lambda kv: kv[1]["name"]):
+            t = self.data["plan"]["targets"].get(rid, {"enabled": False, "qty": 0})
+            run = run_by_id.get(rid)
+            self.plan_tree.insert("", "end", iid=rid, values=(
+                "☑" if t.get("enabled") else "☐", r["name"], f"{t.get('qty', 0):g}",
+                run["crafts"] if run else "—", eng.fmt_money(run["runCost"]) if run else "—",
+            ))
+
+        shortages = [s for s in plan["shortages"] if s["shortage"] > 0]
+        order_total = 0.0
+        self.order_tree.delete(*self.order_tree.get_children())
+        for s in shortages:
+            last = eng.resolve_purchase_steps(self.data, s["id"], s["shortage"])[-1]
+            if last["type"] == "buy":
+                order_total += last["vendor"]["price"] * last["qty"]
+            self.order_tree.insert("", "end", values=(
+                eng.ing_name(self.data, s["id"]), int(s["shortage"]), eng.order_line_text(self.data, s["id"], s["shortage"]),
+            ))
+        self.order_total_var.set(f"Estimated spend: {eng.fmt_money(order_total)}")
+
+
+if __name__ == "__main__":
+    app = LedgerApp()
+    app.mainloop()
