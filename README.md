@@ -13,7 +13,7 @@ Double-click **`run_desktop.bat`**, or from a terminal:
 python desktop_app.py
 ```
 
-That's it — no `pip install` needed, since it only uses what Python already includes.
+That's it — no `pip install` needed, since it only uses what Python already includes. `run_desktop.bat` launches it with `pythonw` (no console window) and closes itself immediately; if the window never appears, check `error_log.txt` it creates next to the script, or run `python desktop_app.py` from a terminal directly to see the error live.
 
 ## Run the browser (Streamlit) version instead
 
