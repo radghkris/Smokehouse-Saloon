@@ -71,10 +71,12 @@ with tab_recipes:
     for rid in recipe_ids_sorted:
         r = data["recipes"][rid]
         m = recipe_metrics(data, r)
+        yield_qty = r["yieldQty"] if r.get("yieldQty", 0) > 0 else 1
         rows.append({
             "id": rid,
             "Name": r["name"] + (" ⚠️" if m["craft"]["warn"] else ""),
             "Category": r["category"], "Yield": r["yieldQty"],
+            "Labor/Item": fmt_money(m["craft"]["laborCost"] / yield_qty),
             "Craft Cost": fmt_money(m["craft"]["total"]), "Cost/Item": fmt_money(m["costPerItem"]),
             "Sale Price": fmt_money(r["salePrice"]) + (" (over cap)" if m["overCap"] else ""),
             "Profit": fmt_money(m["profit"]),
@@ -413,8 +415,25 @@ with tab_settings:
         cap = st.number_input("Server Price Cap", min_value=0.0, step=0.01, value=float(s["priceCap"]), format="%.2f")
         healthy = st.number_input("Healthy Threshold (cost below)", min_value=0.0, step=0.01, value=float(s["thresholdHealthy"]), format="%.2f")
         tight = st.number_input("Problematic Threshold (cost above)", min_value=0.0, step=0.01, value=float(s["thresholdTight"]), format="%.2f")
+        tax = st.number_input("Tax Rate % (reduces revenue used for profit calc)", min_value=0.0, step=0.5, value=float(s.get("taxRatePercent", 0.0)), format="%.2f")
+        st.caption("Placeholder until you know your actual rate — 0% changes nothing.")
         if st.form_submit_button("Save pricing rules"):
-            s["priceCap"], s["thresholdHealthy"], s["thresholdTight"] = cap, healthy, tight
+            s["priceCap"], s["thresholdHealthy"], s["thresholdTight"], s["taxRatePercent"] = cap, healthy, tight, tax
+            save_data(data)
+            st.success("Saved.")
+            st.rerun()
+
+    st.subheader("Labor & Overhead")
+    st.caption("Added to every craft's cost — covers processing time and staffing overhead.")
+    with st.form("settings_labor"):
+        s = data["settings"]
+        c1, c2 = st.columns(2)
+        process_minutes = c1.number_input("Process time (minutes/craft)", min_value=0.0, step=0.5, value=float(s.get("processTimeMinutes", 3.0)))
+        labor_rate = c2.number_input("Labor rate ($ per 30 min)", min_value=0.0, step=0.25, value=float(s.get("laborRatePer30Min", 1.50)), format="%.2f")
+        preview_cost = process_minutes * (labor_rate / 30.0)
+        st.caption(f"= {fmt_money(preview_cost)} labor added to every craft")
+        if st.form_submit_button("Save labor settings"):
+            s["processTimeMinutes"], s["laborRatePer30Min"] = process_minutes, labor_rate
             save_data(data)
             st.success("Saved.")
             st.rerun()

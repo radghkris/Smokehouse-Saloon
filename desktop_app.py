@@ -244,14 +244,20 @@ class RecipeDialog(tk.Toplevel):
         except ValueError:
             sale = 0.0
         lines = self.lines_editor.get_lines(self.name_to_id) if hasattr(self, "lines_editor") else []
-        cost_total = sum(eng.ing_cost(self.app.data, l["ingredientId"])["cost"] * l["qty"] for l in lines)
+        ingredient_cost = sum(eng.ing_cost(self.app.data, l["ingredientId"])["cost"] * l["qty"] for l in lines)
+        labor_cost = eng.labor_cost_per_craft(self.app.data)
+        cost_total = ingredient_cost + labor_cost
         cost_per_item = cost_total / yield_qty
-        profit = sale - cost_per_item
-        if sale > 0:
-            margin_pct = profit / sale * 100
-            self.margin_var.set(f"{margin_pct:.0f}% margin is {eng.fmt_money(profit)}  (cost {eng.fmt_money(cost_per_item)}/item, sale {eng.fmt_money(sale)})")
+        net_sale = eng.net_of_tax(self.app.data, sale)
+        profit = net_sale - cost_per_item
+        if net_sale > 0:
+            margin_pct = profit / net_sale * 100
+            self.margin_var.set(
+                f"{margin_pct:.0f}% margin is {eng.fmt_money(profit)}  "
+                f"(cost {eng.fmt_money(cost_per_item)}/item — ingredients {eng.fmt_money(ingredient_cost/yield_qty)} + labor {eng.fmt_money(labor_cost/yield_qty)}; sale {eng.fmt_money(sale)})"
+            )
         else:
-            self.margin_var.set(f"Cost {eng.fmt_money(cost_per_item)}/item — set a sale price to see margin")
+            self.margin_var.set(f"Cost {eng.fmt_money(cost_per_item)}/item (incl. labor) — set a sale price to see margin")
 
     def _save(self):
         name = self.name_var.get().strip()
@@ -542,7 +548,27 @@ class SettingsFrame(ttk.Frame):
         ttk.Label(pricing, text="Problematic threshold (cost above)").grid(row=2, column=0, sticky="w")
         self.tight_var = tk.StringVar(value=str(s["thresholdTight"]))
         ttk.Entry(pricing, textvariable=self.tight_var, width=10).grid(row=2, column=1, padx=6)
-        ttk.Button(pricing, text="Save pricing rules", command=self._save_pricing).grid(row=3, column=0, pady=(8, 0), sticky="w")
+        ttk.Label(pricing, text="Tax rate % (reduces revenue used for profit calc)").grid(row=3, column=0, sticky="w")
+        self.tax_var = tk.StringVar(value=str(s.get("taxRatePercent", 0)))
+        ttk.Entry(pricing, textvariable=self.tax_var, width=10).grid(row=3, column=1, padx=6)
+        ttk.Label(pricing, text="Placeholder until you know your actual rate — 0% changes nothing.", foreground=INK_DIM).grid(row=4, column=0, columnspan=2, sticky="w")
+        ttk.Button(pricing, text="Save pricing rules", command=self._save_pricing).grid(row=5, column=0, pady=(8, 0), sticky="w")
+
+        labor = ttk.LabelFrame(self, text="Labor & Overhead", padding=10)
+        labor.pack(fill="x", pady=(0, 10))
+        ttk.Label(labor, text="Added to every craft's cost — covers processing time and staffing overhead.", wraplength=420, justify="left").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        ttk.Label(labor, text="Process time (minutes/craft)").grid(row=1, column=0, sticky="w")
+        self.process_time_var = tk.StringVar(value=str(s.get("processTimeMinutes", 3.0)))
+        ttk.Entry(labor, textvariable=self.process_time_var, width=10).grid(row=1, column=1, sticky="w")
+        ttk.Label(labor, text="Labor rate ($ per 30 min)").grid(row=2, column=0, sticky="w")
+        self.labor_rate_var = tk.StringVar(value=str(s.get("laborRatePer30Min", 1.50)))
+        ttk.Entry(labor, textvariable=self.labor_rate_var, width=10).grid(row=2, column=1, sticky="w")
+        self.labor_preview_var = tk.StringVar(value="")
+        ttk.Label(labor, textvariable=self.labor_preview_var, font=(RESOLVED["body"], 10, "bold"), foreground=GOOD).grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ttk.Button(labor, text="Save labor settings", command=self._save_labor).grid(row=4, column=0, pady=(8, 0), sticky="w")
+        self.process_time_var.trace_add("write", lambda *a: self._update_labor_preview())
+        self.labor_rate_var.trace_add("write", lambda *a: self._update_labor_preview())
+        self._update_labor_preview()
 
         meat = ttk.LabelFrame(self, text="Meat Processing", padding=10)
         meat.pack(fill="x")
@@ -567,14 +593,37 @@ class SettingsFrame(ttk.Frame):
             cap = float(self.cap_var.get())
             healthy = float(self.healthy_var.get())
             tight = float(self.tight_var.get())
+            tax = float(self.tax_var.get())
         except ValueError:
             messagebox.showerror("Invalid number", "Pricing fields must be numbers.")
             return
         s = self.app.data["settings"]
-        s["priceCap"], s["thresholdHealthy"], s["thresholdTight"] = cap, healthy, tight
+        s["priceCap"], s["thresholdHealthy"], s["thresholdTight"], s["taxRatePercent"] = cap, healthy, tight, tax
         eng.save_data(self.app.data)
         self.app.refresh_all()
         messagebox.showinfo("Saved", "Pricing rules saved.")
+
+    def _update_labor_preview(self):
+        try:
+            minutes = float(self.process_time_var.get() or 0)
+            rate = float(self.labor_rate_var.get() or 0)
+            cost = minutes * (rate / 30.0)
+            self.labor_preview_var.set(f"= {eng.fmt_money(cost)} labor added to every craft")
+        except ValueError:
+            self.labor_preview_var.set("Enter numbers to preview the labor cost per craft")
+
+    def _save_labor(self):
+        try:
+            minutes = float(self.process_time_var.get())
+            rate = float(self.labor_rate_var.get())
+        except ValueError:
+            messagebox.showerror("Invalid number", "Process time and labor rate must be numbers.")
+            return
+        s = self.app.data["settings"]
+        s["processTimeMinutes"], s["laborRatePer30Min"] = minutes, rate
+        eng.save_data(self.app.data)
+        self.app.refresh_all()
+        messagebox.showinfo("Saved", "Labor settings saved.")
 
     def _save_meat(self):
         try:
@@ -700,7 +749,7 @@ class LedgerApp(tk.Tk):
         ttk.Button(top, text="Edit Selected", command=self._edit_selected_recipe).pack(side="right", padx=4)
         ttk.Button(top, text="Delete Selected", command=self._delete_selected_recipe).pack(side="right", padx=4)
 
-        cols = ["Name", "Category", "Yield", "Craft Cost", "Cost/Item", "Sale Price", "Profit", "Margin", "Tier", "Active"]
+        cols = ["Name", "Category", "Yield", "Labor/Item", "Craft Cost", "Cost/Item", "Sale Price", "Profit", "Margin", "Tier", "Active"]
         frame, self.recipes_tree = make_tree(self.tab_recipes, cols, {"Name": 200}, height=16)
         frame.pack(fill="both", expand=True, padx=10, pady=10)
         configure_tier_tags(self.recipes_tree)
@@ -1028,8 +1077,10 @@ class LedgerApp(tk.Tk):
             margin = "—" if m["margin"] is None else f"{m['margin']*100:.1f}%"
             tier = {"good": "healthy", "warn": "tight", "bad": "problematic"}[m["tier"]]
             name = r["name"] + (" ⚠️" if m["craft"]["warn"] else "")
+            yield_qty = r["yieldQty"] if r.get("yieldQty", 0) > 0 else 1
+            labor_per_item = m["craft"]["laborCost"] / yield_qty
             self.recipes_tree.insert("", "end", iid=rid, values=(
-                name, r["category"], r["yieldQty"], eng.fmt_money(m["craft"]["total"]), eng.fmt_money(m["costPerItem"]),
+                name, r["category"], r["yieldQty"], eng.fmt_money(labor_per_item), eng.fmt_money(m["craft"]["total"]), eng.fmt_money(m["costPerItem"]),
                 eng.fmt_money(r["salePrice"]) + (" (over cap)" if m["overCap"] else ""), eng.fmt_money(m["profit"]),
                 margin, tier, "Yes" if r["active"] else "No",
             ), tags=(f"tier_{m['tier']}",))

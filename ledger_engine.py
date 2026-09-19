@@ -120,14 +120,28 @@ SEED = {
         "priceCap": 0.45, "thresholdHealthy": 0.20, "thresholdTight": 0.30,
         "meatIngredientId": "prepared-meat-cut", "meatMode": "override",
         "meatRawCost": 0, "meatProcessingFee": 0.03, "meatOverrideCost": 0.08,
+        "laborRatePer30Min": 1.50, "processTimeMinutes": 3.0, "taxRatePercent": 0.0,
     },
 }
+
+# Settings keys that may be missing from a data file saved before a given
+# feature existed (e.g. labor costing). load_data() backfills only the
+# missing keys onto an existing file -- it never touches what's already there.
+SETTINGS_DEFAULTS = SEED["settings"]
 
 
 def load_data():
     if DATA_FILE.exists():
         with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        changed = False
+        for key, default in SETTINGS_DEFAULTS.items():
+            if key not in data.setdefault("settings", {}):
+                data["settings"][key] = default
+                changed = True
+        if changed:
+            save_data(data)
+        return data
     save_data(SEED)
     return json.loads(json.dumps(SEED))
 
@@ -194,6 +208,22 @@ def ing_cost(data, ing_id, visiting=None):
     return {"cost": 0.0, "warn": True, "reason": "no-price"}
 
 
+def labor_cost_per_craft(data):
+    """Overhead cost of the time a single craft/batch-slot takes to process,
+    using the shared Process Time x Labor Rate settings (same for every
+    recipe -- see Settings)."""
+    s = data["settings"]
+    minutes = s.get("processTimeMinutes") or 0.0
+    rate_per_30 = s.get("laborRatePer30Min") or 0.0
+    return minutes * (rate_per_30 / 30.0)
+
+
+def net_of_tax(data, amount):
+    """What's actually kept from a sale after the (still-unconfirmed) tax rate."""
+    rate = (data["settings"].get("taxRatePercent") or 0.0) / 100.0
+    return amount * (1 - rate)
+
+
 def recipe_craft_cost(data, recipe):
     total, warn, lines = 0.0, False, []
     for ri in recipe.get("ingredients", []):
@@ -202,7 +232,9 @@ def recipe_craft_cost(data, recipe):
         line_cost = res["cost"] * ri["qty"]
         total += line_cost
         lines.append({**ri, "unitCost": res["cost"], "lineCost": line_cost, "warn": res["warn"]})
-    return {"total": total, "lines": lines, "warn": warn}
+    labor = labor_cost_per_craft(data)
+    total += labor
+    return {"total": total, "lines": lines, "warn": warn, "ingredientCost": total - labor, "laborCost": labor}
 
 
 def recipe_metrics(data, recipe):
@@ -210,8 +242,9 @@ def recipe_metrics(data, recipe):
     yield_qty = recipe["yieldQty"] if recipe.get("yieldQty", 0) > 0 else 1
     cost_per_item = craft["total"] / yield_qty
     sale = recipe.get("salePrice") or 0.0
-    profit = sale - cost_per_item
-    margin = (profit / sale) if sale > 0 else None
+    net_sale = net_of_tax(data, sale)
+    profit = net_sale - cost_per_item
+    margin = (profit / net_sale) if net_sale > 0 else None
     s = data["settings"]
     tier = "good"
     if cost_per_item > s["thresholdTight"]:
@@ -219,7 +252,7 @@ def recipe_metrics(data, recipe):
     elif cost_per_item > s["thresholdHealthy"]:
         tier = "warn"
     return {"craft": craft, "costPerItem": cost_per_item, "profit": profit, "margin": margin,
-            "tier": tier, "overCap": sale > s["priceCap"]}
+            "tier": tier, "overCap": sale > s["priceCap"], "netSale": net_sale}
 
 
 def compute_plan(data):
