@@ -989,11 +989,30 @@ class LedgerApp(tk.Tk):
         ttk.Label(order_label, text="What To Order", font=(RESOLVED["display"], 14), foreground=ACCENT).pack(side="left")
         self.order_total_var = tk.StringVar(value="")
         ttk.Label(order_label, textvariable=self.order_total_var, foreground=INK_DIM).pack(side="left", padx=10)
+        self.copy_all_btn = ttk.Button(order_label, text="Copy List", command=self._copy_order_list)
+        self.copy_all_btn.pack(side="right")
+        ttk.Label(order_label, text="Ctrl+C copies the selected row", foreground=INK_DIM).pack(side="right", padx=10)
 
         order_frame, self.order_tree = make_tree(
             self.tab_planner, ["Ingredient", "Short", "Do This"], {"Ingredient": 140, "Do This": 420}, height=10,
         )
         order_frame.pack(fill="both", expand=True, padx=10, pady=(4, 10))
+        self.order_items = {}
+        self.order_tree.bind("<Control-c>", lambda e: self._copy_order_list(selected_only=True))
+
+    def _copy_order_list(self, selected_only=False):
+        """Copies 'Item xQty' lines -- the thing you actually buy/hunt (e.g. Sugarcane,
+        not Sugar) -- ready to paste into chat, Discord, or a shopping note."""
+        keys = self.order_tree.selection() if selected_only else self.order_tree.get_children()
+        lines = [f"{self.order_items[k][0]} x{self.order_items[k][1]:g}" for k in keys if k in self.order_items]
+        if not lines:
+            return "break"
+        self.clipboard_clear()
+        self.clipboard_append("\n".join(lines))
+        self.update()
+        self.copy_all_btn.configure(text="Copied!")
+        self.after(1500, lambda: self.copy_all_btn.configure(text="Copy List"))
+        return "break"
 
     def _planner_cell_click(self, event):
         tree = self.plan_tree
@@ -1203,11 +1222,13 @@ class LedgerApp(tk.Tk):
         shortages = [s for s in plan["shortages"] if s["shortage"] > 0]
         order_total = 0.0
         self.order_tree.delete(*self.order_tree.get_children())
+        self.order_items = {}
         for s in shortages:
             last = eng.resolve_purchase_steps(self.data, s["id"], s["shortage"])[-1]
             if last["type"] == "buy":
                 order_total += last["vendor"]["price"] * last["qty"]
-            self.order_tree.insert("", "end", values=(
+            self.order_items[s["id"]] = (eng.ing_name(self.data, last["ingredientId"]), last["qty"])
+            self.order_tree.insert("", "end", iid=s["id"], values=(
                 eng.ing_name(self.data, s["id"]), int(s["shortage"]), eng.order_line_text(self.data, s["id"], s["shortage"]),
             ))
         stripe_tree(self.order_tree)
