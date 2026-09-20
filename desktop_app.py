@@ -9,25 +9,51 @@ import ledger_engine as eng
 
 MONEY_COLS_HELP = "Double-click a row where noted to edit it."
 
-# Same palette as the browser version (blackwater-ledger.html) -- a saloon
-# ledger-book look: aged paper, ink brown, rust-red accent.
-BG = "#f2e9d6"
-SURFACE = "#fbf5e8"
-SURFACE2 = "#ece0c4"
-INK = "#2c2013"
-INK_DIM = "#6c5c42"
-LINE = "#d9cba8"
-ACCENT = "#9a3324"
-ACCENT2 = "#a9762f"
-GOOD = "#3d7a4a"
-GOOD_BG = "#d9d9c2"
-WARN = "#b0791e"
-WARN_BG = "#e7d7b9"
-BAD = "#a3283f"
-BAD_BG = "#e7cec1"
+# Same palettes as the browser version (blackwater-ledger.html): light is an aged-paper
+# ledger book, dark is the same book by lamplight. apply_palette() rewrites the module
+# globals below, so every widget built afterwards picks up the chosen colors.
+PALETTES = {
+    "light": dict(BG="#f2e9d6", SURFACE="#fbf5e8", SURFACE2="#ece0c4", INK="#2c2013", INK_DIM="#6c5c42",
+                  LINE="#d9cba8", ACCENT="#9a3324", ACCENT2="#a9762f", ON_ACCENT="#fbf5e8",
+                  GOOD="#3d7a4a", GOOD_BG="#d9d9c2", WARN="#b0791e", WARN_BG="#e7d7b9",
+                  BAD="#a3283f", BAD_BG="#e7cec1"),
+    "dark": dict(BG="#18130e", SURFACE="#211a13", SURFACE2="#2a2118", INK="#f0e4cd", INK_DIM="#b7a483",
+                 LINE="#3d3223", ACCENT="#d1694b", ACCENT2="#d8a94e", ON_ACCENT="#1b120c",
+                 GOOD="#6bc47f", GOOD_BG="#242c1e", WARN="#e0b04b", WARN_BG="#342917",
+                 BAD="#e2708a", BAD_BG="#382222"),
+}
+CURRENT = {"dark": False}
 
-ROW_EVEN_BG = SURFACE
-ROW_ODD_BG = SURFACE2
+
+def apply_palette(name):
+    g = globals()
+    g.update(PALETTES[name])
+    g["ROW_EVEN_BG"], g["ROW_ODD_BG"] = g["SURFACE"], g["SURFACE2"]
+    CURRENT["dark"] = name == "dark"
+
+
+apply_palette("light")
+
+
+def set_titlebar_dark(win, dark):
+    """Windows 10/11 only: dark title bar to match. Silently skipped elsewhere."""
+    if sys.platform != "win32":
+        return
+    try:
+        win.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(win.winfo_id())
+        value = ctypes.c_int(1 if dark else 0)
+        for attr in (20, 19):
+            if ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(value), ctypes.sizeof(value)) == 0:
+                break
+    except Exception:
+        pass
+
+
+def style_window(win):
+    win.configure(background=BG)
+    set_titlebar_dark(win, CURRENT["dark"])
+
 
 FONTS_DIR = Path(__file__).resolve().parent / "fonts"
 DISPLAY_FONT_NAME = "Rye"
@@ -183,7 +209,7 @@ class RecipeDialog(tk.Toplevel):
         self.resizable(False, False)
         self.transient(app)
         self.grab_set()
-        self.configure(background=BG)
+        style_window(self)
 
         ids_sorted = sorted(app.data["ingredients"], key=lambda i: app.data["ingredients"][i]["name"])
         self.name_to_id = {app.data["ingredients"][i]["name"]: i for i in ids_sorted}
@@ -298,7 +324,7 @@ class IngredientDialog(tk.Toplevel):
         self.resizable(False, False)
         self.transient(app)
         self.grab_set()
-        self.configure(background=BG)
+        style_window(self)
 
         form = ttk.Frame(self, padding=12)
         form.pack()
@@ -342,7 +368,7 @@ class ConversionDialog(tk.Toplevel):
         self.resizable(False, False)
         self.transient(app)
         self.grab_set()
-        self.configure(background=BG)
+        style_window(self)
 
         ids_sorted = sorted(app.data["ingredients"], key=lambda i: app.data["ingredients"][i]["name"])
         self.name_to_id = {app.data["ingredients"][i]["name"]: i for i in ids_sorted}
@@ -407,7 +433,7 @@ class VendorDialog(tk.Toplevel):
         self.resizable(False, False)
         self.transient(app)
         self.grab_set()
-        self.configure(background=BG)
+        style_window(self)
 
         ids_sorted = sorted(app.data["ingredients"], key=lambda i: app.data["ingredients"][i]["name"])
         self.name_to_id = {app.data["ingredients"][i]["name"]: i for i in ids_sorted}
@@ -538,7 +564,7 @@ class SettingsFrame(ttk.Frame):
         s = app.data["settings"]
 
         pricing = ttk.LabelFrame(self, text="Pricing Rules", padding=10)
-        pricing.pack(fill="x", pady=(0, 10))
+        pricing.grid(row=0, column=0, sticky="nsew", padx=(0, 10), pady=(0, 10))
         ttk.Label(pricing, text="Server price cap").grid(row=0, column=0, sticky="w")
         self.cap_var = tk.StringVar(value=str(s["priceCap"]))
         ttk.Entry(pricing, textvariable=self.cap_var, width=10).grid(row=0, column=1, padx=6)
@@ -555,7 +581,7 @@ class SettingsFrame(ttk.Frame):
         ttk.Button(pricing, text="Save pricing rules", command=self._save_pricing).grid(row=5, column=0, pady=(8, 0), sticky="w")
 
         labor = ttk.LabelFrame(self, text="Labor & Overhead", padding=10)
-        labor.pack(fill="x", pady=(0, 10))
+        labor.grid(row=1, column=0, sticky="nsew", padx=(0, 10))
         ttk.Label(labor, text="Added to every craft's cost — covers processing time and staffing overhead.", wraplength=420, justify="left").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
         ttk.Label(labor, text="Process time (minutes/craft)").grid(row=1, column=0, sticky="w")
         self.process_time_var = tk.StringVar(value=str(s.get("processTimeMinutes", 3.0)))
@@ -571,7 +597,7 @@ class SettingsFrame(ttk.Frame):
         self._update_labor_preview()
 
         meat = ttk.LabelFrame(self, text="Meat Processing", padding=10)
-        meat.pack(fill="x")
+        meat.grid(row=0, column=1, rowspan=2, sticky="new")
         ttk.Label(meat, text="Prepared Meat Cut is priced specially. Choose calculated (raw + fee) or a flat override.", wraplength=420, justify="left").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
         self.mode_var = tk.StringVar(value=s["meatMode"])
         ttk.Radiobutton(meat, text="Manual override", variable=self.mode_var, value="override").grid(row=1, column=0, sticky="w")
@@ -649,39 +675,78 @@ class LedgerApp(tk.Tk):
         self.data = eng.load_data()
 
         load_local_fonts()
-        display, body = resolve_fonts(self)
-        RESOLVED["display"], RESOLVED["body"] = display, body
-        self.configure(background=BG)
+        RESOLVED["display"], RESOLVED["body"] = resolve_fonts(self)
+        self.dark_var = tk.BooleanVar(value=bool(self.data["settings"].get("darkMode")))
+        apply_palette("dark" if self.dark_var.get() else "light")
+        self._apply_theme()
+        self._build_ui()
 
+    def _apply_theme(self):
+        display, body = RESOLVED["display"], RESOLVED["body"]
+        style_window(self)
         style = ttk.Style(self)
         try:
             style.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure(".", background=BG, foreground=INK, font=(body, 10))
+        style.configure(".", background=BG, foreground=INK, font=(body, 10), bordercolor=LINE,
+                        lightcolor=SURFACE2, darkcolor=SURFACE2, troughcolor=BG)
         style.configure("TFrame", background=BG)
         style.configure("TLabel", background=BG, foreground=INK, font=(body, 10))
-        style.configure("TButton", background=SURFACE2, foreground=INK, font=(body, 10), padding=5, bordercolor=LINE)
-        style.map("TButton", background=[("active", ACCENT2), ("pressed", ACCENT)], foreground=[("active", SURFACE), ("pressed", SURFACE)])
-        style.configure("TCheckbutton", background=BG, foreground=INK, font=(body, 10))
-        style.configure("TRadiobutton", background=BG, foreground=INK, font=(body, 10))
-        style.configure("TEntry", fieldbackground=SURFACE, foreground=INK, bordercolor=LINE)
-        style.configure("TCombobox", fieldbackground=SURFACE, foreground=INK, background=SURFACE2)
+        style.configure("TButton", background=SURFACE2, foreground=INK, font=(body, 10), padding=5,
+                        bordercolor=LINE, lightcolor=SURFACE2, darkcolor=SURFACE2)
+        style.map("TButton", background=[("active", ACCENT2), ("pressed", ACCENT)],
+                  foreground=[("active", ON_ACCENT), ("pressed", ON_ACCENT)])
+        for name in ("TCheckbutton", "TRadiobutton"):
+            style.configure(name, background=BG, foreground=INK, font=(body, 10),
+                            indicatorbackground=SURFACE, indicatorforeground=INK)
+            style.map(name, background=[("active", BG)], foreground=[("active", INK)],
+                      indicatorbackground=[("selected", SURFACE), ("active", SURFACE2)])
+        style.configure("TEntry", fieldbackground=SURFACE, foreground=INK, insertcolor=INK, bordercolor=LINE)
+        style.configure("TCombobox", fieldbackground=SURFACE, foreground=INK, background=SURFACE2,
+                        arrowcolor=INK, insertcolor=INK, selectbackground=SURFACE, selectforeground=INK)
+        style.map("TCombobox", fieldbackground=[("readonly", SURFACE)], foreground=[("readonly", INK)],
+                  selectbackground=[("readonly", SURFACE)], selectforeground=[("readonly", INK)])
+        self.option_add("*TCombobox*Listbox.background", SURFACE)
+        self.option_add("*TCombobox*Listbox.foreground", INK)
+        self.option_add("*TCombobox*Listbox.selectBackground", ACCENT2)
+        self.option_add("*TCombobox*Listbox.selectForeground", ON_ACCENT)
+        style.configure("TScrollbar", background=SURFACE2, troughcolor=BG, arrowcolor=INK_DIM, bordercolor=LINE)
         style.configure("TLabelframe", background=BG, bordercolor=LINE)
         style.configure("TLabelframe.Label", background=BG, foreground=ACCENT, font=(display, 12))
         style.configure("TNotebook", background=BG, bordercolor=LINE)
-        style.configure("TNotebook.Tab", background=SURFACE2, foreground=INK_DIM, font=(body, 10, "bold"), padding=(12, 6))
-        style.map("TNotebook.Tab", background=[("selected", ACCENT)], foreground=[("selected", SURFACE)])
-        style.configure("Treeview", background=SURFACE, fieldbackground=SURFACE, foreground=INK, font=(body, 10), rowheight=24, bordercolor=LINE)
-        style.configure("Treeview.Heading", background=SURFACE2, foreground=INK_DIM, font=(body, 9, "bold"))
-        style.map("Treeview", background=[("selected", ACCENT2)], foreground=[("selected", SURFACE)])
-        global ROW_EVEN_BG, ROW_ODD_BG
-        ROW_EVEN_BG, ROW_ODD_BG = SURFACE, SURFACE2
+        style.configure("TNotebook.Tab", background=SURFACE2, foreground=INK_DIM, font=(body, 10, "bold"),
+                        padding=(12, 6), bordercolor=LINE)
+        style.map("TNotebook.Tab", background=[("selected", ACCENT)], foreground=[("selected", ON_ACCENT)])
+        style.configure("Treeview", background=SURFACE, fieldbackground=SURFACE, foreground=INK, font=(body, 10),
+                        rowheight=24, bordercolor=LINE)
+        style.configure("Treeview.Heading", background=SURFACE2, foreground=INK_DIM, font=(body, 9, "bold"),
+                        bordercolor=LINE)
+        style.map("Treeview.Heading", background=[("active", SURFACE2)])
+        style.map("Treeview", background=[("selected", ACCENT2)], foreground=[("selected", ON_ACCENT)])
 
+    def _toggle_dark(self):
+        self.after_idle(self._switch_theme)
+
+    def _switch_theme(self):
+        dark = self.dark_var.get()
+        self.data["settings"]["darkMode"] = dark
+        eng.save_data(self.data)
+        current_tab = self.notebook.index(self.notebook.select())
+        apply_palette("dark" if dark else "light")
+        for child in self.winfo_children():
+            child.destroy()
+        self._apply_theme()
+        self._build_ui()
+        self.notebook.select(current_tab)
+
+    def _build_ui(self):
+        display = RESOLVED["display"]
         header = ttk.Frame(self, padding=(12, 10, 12, 4))
         header.pack(fill="x")
         ttk.Label(header, text="\U0001F356 Blackwater Ledger", font=(display, 20), foreground=ACCENT).pack(side="left")
-        ttk.Label(header, text="  The Smokehouse at Blackwater Saloon — data saves to ledger_data.json", foreground=INK_DIM).pack(side="left")
+        ttk.Label(header, text="  The Smokehouse at Blackwater Saloon \u2014 data saves to ledger_data.json", foreground=INK_DIM).pack(side="left")
+        ttk.Checkbutton(header, text="Dark mode", variable=self.dark_var, command=self._toggle_dark).pack(side="right")
 
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True, padx=8, pady=8)
@@ -750,7 +815,9 @@ class LedgerApp(tk.Tk):
         ttk.Button(top, text="Delete Selected", command=self._delete_selected_recipe).pack(side="right", padx=4)
 
         cols = ["Name", "Category", "Yield", "Labor/Item", "Craft Cost", "Cost/Item", "Sale Price", "Profit", "Margin", "Tier", "Active"]
-        frame, self.recipes_tree = make_tree(self.tab_recipes, cols, {"Name": 200}, height=16)
+        widths = {c: 88 for c in cols}
+        widths["Name"] = 200
+        frame, self.recipes_tree = make_tree(self.tab_recipes, cols, widths, height=16)
         frame.pack(fill="both", expand=True, padx=10, pady=10)
         configure_tier_tags(self.recipes_tree)
         self.recipes_tree.bind("<Double-1>", self._toggle_recipe_active)
@@ -1067,7 +1134,7 @@ class LedgerApp(tk.Tk):
         dialog.resizable(False, False)
         dialog.transient(self)
         dialog.grab_set()
-        dialog.configure(background=BG)
+        style_window(dialog)
         form = ttk.Frame(dialog, padding=12)
         form.pack()
         uses_parts = [f"{eng.ing_name(self.data, li['ingredientId'])} x{li['qty']:g}" for li in r["ingredients"]]

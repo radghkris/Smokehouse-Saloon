@@ -121,6 +121,7 @@ SEED = {
         "meatIngredientId": "prepared-meat-cut", "meatMode": "override",
         "meatRawCost": 0, "meatProcessingFee": 0.03, "meatOverrideCost": 0.08,
         "laborRatePer30Min": 1.50, "processTimeMinutes": 3.0, "taxRatePercent": 0.0,
+        "darkMode": False,
     },
 }
 
