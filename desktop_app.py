@@ -1,4 +1,5 @@
 import ctypes
+import re
 import sys
 import tkinter as tk
 import tkinter.font as tkfont
@@ -1014,6 +1015,7 @@ class LedgerApp(tk.Tk):
         ttk.Label(top, textvariable=self.inv_total_var, font=(RESOLVED["body"], 10, "bold"), foreground=INK).pack(side="right", padx=(10, 0))
         self.inv_copy_btn = ttk.Button(top, text="Copy Order List", command=self._copy_inventory_order_list)
         self.inv_copy_btn.pack(side="right")
+        ttk.Button(top, text="Mark Order Received", command=self._receive_order).pack(side="right", padx=(0, 6))
 
         frame, self.inv_tree = make_tree(
             self.tab_inv, ["Ingredient", "Unit", "On Hand", "To Order", "Preferred Source", "Unit Cost", "Value"],
@@ -1039,6 +1041,45 @@ class LedgerApp(tk.Tk):
         self.update()
         self.inv_copy_btn.configure(text="Copied!")
         self.after(1500, lambda: self.inv_copy_btn.configure(text="Copy Order List"))
+
+    def _receive_order(self):
+        """Adds each ingredient's To Order number to On Hand and clears the note --
+        marking that the order came in. Pulls the first number out of the note (so
+        '50 (ask Sam)' still works), skipping anything with no number in it."""
+        to_add, unparsed = [], []
+        for iid in sorted(self.data["ingredients"], key=lambda i: self.data["ingredients"][i]["name"]):
+            note = (self.data["inventory"].get(iid, {}).get("toOrder") or "").strip()
+            if not note:
+                continue
+            m = re.search(r"-?\d+(?:\.\d+)?", note)
+            if m:
+                qty = float(m.group())
+                if qty > 0:
+                    to_add.append((iid, eng.ing_name(self.data, iid), qty, note))
+                    continue
+            unparsed.append((eng.ing_name(self.data, iid), note))
+
+        if not to_add and not unparsed:
+            messagebox.showinfo("Nothing to receive", "No ingredients have a To Order note yet.")
+            return
+        if not to_add:
+            messagebox.showwarning("No number found", "None of the To Order notes have a number in them, so there's nothing to add:\n\n"
+                                    + "\n".join(f"{name}: \"{note}\"" for name, note in unparsed))
+            return
+
+        lines = [f"{name}: On Hand +{qty:g}  (from \"{note}\")" for _, name, qty, note in to_add]
+        msg = "Add these to On Hand and clear their To Order notes?\n\n" + "\n".join(lines)
+        if unparsed:
+            msg += "\n\nSkipped (no number found, left as-is):\n" + "\n".join(f"{name}: \"{note}\"" for name, note in unparsed)
+        if not messagebox.askyesno("Mark Order Received", msg):
+            return
+
+        for iid, name, qty, note in to_add:
+            inv = self.data["inventory"].setdefault(iid, {"qty": 0, "preferredVendorId": None, "toOrder": ""})
+            inv["qty"] = (inv.get("qty") or 0) + qty
+            inv["toOrder"] = ""
+        eng.save_data(self.data)
+        self.refresh_all()
 
     def _inventory_cell_click(self, event):
         tree = self.inv_tree
