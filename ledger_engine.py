@@ -102,7 +102,7 @@ SEED = {
         "pappys-cane-coffee": {"name": "Pappy’s Cane Coffee", "category": "drink", "yieldQty": 1, "salePrice": 0.45, "active": True,
                                 "ingredients": [{"ingredientId": "coffee-beans", "qty": 2}, {"ingredientId": "sugar", "qty": 4}, {"ingredientId": "water", "qty": 1}]},
     },
-    "inventory": {ing_id: {"qty": 0, "preferredVendorId": None} for ing_id in [
+    "inventory": {ing_id: {"qty": 0, "preferredVendorId": None, "toOrder": ""} for ing_id in [
         "tea-leaf", "orange", "sugar", "water", "coca-leaf", "lime", "prepared-meat-cut", "beans", "pimenta",
         "tomato", "whisky", "barley", "cherry", "potato", "corn", "wheat", "onion", "milk", "carrot",
         "creeping-thyme", "coffee-beans", "sugarcane",
