@@ -101,18 +101,37 @@ def _sort_key(raw):
         return (1, s.lower())
 
 
-def sort_tree_column(tree, col, reverse):
+def _reorder_by_sort(tree, col, reverse):
     items = [(tree.set(k, col), k) for k in tree.get_children("")]
     items.sort(key=lambda pair: _sort_key(pair[0]), reverse=reverse)
     for index, (_, k) in enumerate(items):
         tree.move(k, "", index)
+
+
+def sort_tree_column(tree, col, reverse):
+    """Header-click handler. Reorders only — never touches row tags, since some
+    trees (Recipes, Pricing Watch) use tags for healthy/tight/problematic status
+    coloring rather than zebra striping."""
+    tree._sort_state = (col, reverse)
+    _reorder_by_sort(tree, col, reverse)
     tree.heading(col, command=lambda: sort_tree_column(tree, col, not reverse))
-    stripe_tree(tree)
+
+
+def restore_sort(tree):
+    """Call after repopulating a tree whose rows are colored by something other than
+    zebra striping (status tags) — reapplies the tree's last sort, if any, without
+    touching tags. Needed because every refresh fully deletes and re-inserts rows,
+    which would otherwise silently drop any sort the user clicked into place."""
+    state = getattr(tree, "_sort_state", None)
+    if state:
+        _reorder_by_sort(tree, *state)
 
 
 def stripe_tree(tree):
-    """Alternating row shading — ttk.Treeview has no true cell gridlines, so this is
-    what stands in for 'lined rows/columns' to keep wide tables readable."""
+    """Call after repopulating a plain zebra-striped tree — reapplies the last sort
+    (see restore_sort) and re-stripes; both must happen after every refresh since
+    rows are fully deleted and re-inserted each time."""
+    restore_sort(tree)
     for i, k in enumerate(tree.get_children("")):
         tree.item(k, tags=("even" if i % 2 == 0 else "odd",))
 
@@ -1228,6 +1247,7 @@ class LedgerApp(tk.Tk):
             flag = ("OVER CAP, " if m["overCap"] else "") + ("problematic" if m["tier"] == "bad" else "tight")
             self.watch_tree.insert("", "end", values=(r["name"], eng.fmt_money(m["costPerItem"]), eng.fmt_money(r["salePrice"]), flag),
                                     tags=(f"tier_{m['tier']}",))
+        restore_sort(self.watch_tree)
         stripe_tree(self.grow_tree)
 
     def _refresh_recipes(self):
@@ -1244,6 +1264,7 @@ class LedgerApp(tk.Tk):
                 eng.fmt_money(r["salePrice"]) + (" (over cap)" if m["overCap"] else ""), eng.fmt_money(m["profit"]),
                 margin, tier, "Yes" if r["active"] else "No",
             ), tags=(f"tier_{m['tier']}",))
+        restore_sort(self.recipes_tree)
 
     def _refresh_ingredients(self):
         self.ing_tree.delete(*self.ing_tree.get_children())
