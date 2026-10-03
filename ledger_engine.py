@@ -117,7 +117,7 @@ SEED = {
         "pappys-cane-coffee": {"active": True},
     }.items()}},
     "settings": {
-        "priceCap": 0.45, "marginHealthyPercent": 80, "marginProblematicBelowPercent": 20,
+        "priceCap": 0.45, "marginHealthyPercent": 80, "marginGoodPercent": 65, "marginProblematicBelowPercent": 20,
         "targetMarginPercent": 65,
         "meatIngredientId": "prepared-meat-cut", "meatMode": "override",
         "meatRawCost": 0, "meatProcessingFee": 0.03, "meatOverrideCost": 0.08,
@@ -180,7 +180,18 @@ def ing_name(data, ing_id):
 
 def cheapest_vendor(data, ing_id):
     pool = [v for v in data["vendors"] if v["ingredientId"] == ing_id and v.get("price") is not None]
-    return min(pool, key=lambda v: v["price"]) if pool else None
+    return min(pool, key=lambda v: (v.get("stock") == "out", v["price"])) if pool else None
+
+
+def direct_vendor(data, ing_id):
+    """The supplier an ingredient is actually bought from: the preferred one if set,
+    otherwise the cheapest in-stock one. Used before any conversion is considered."""
+    pref_id = data["inventory"].get(ing_id, {}).get("preferredVendorId")
+    if pref_id:
+        pref = next((v for v in data["vendors"] if v["id"] == pref_id and v.get("price") is not None), None)
+        if pref:
+            return pref
+    return cheapest_vendor(data, ing_id)
 
 
 def ing_cost(data, ing_id, visiting=None):
@@ -192,21 +203,15 @@ def ing_cost(data, ing_id, visiting=None):
         if s.get("meatMode") == "override":
             return {"cost": s.get("meatOverrideCost") or 0.0, "warn": False, "reason": "override"}
         return {"cost": (s.get("meatRawCost") or 0.0) + (s.get("meatProcessingFee") or 0.0), "warn": False, "reason": "calculated"}
+    vendor = direct_vendor(data, ing_id)
+    if vendor:
+        return {"cost": vendor["price"], "warn": False, "reason": "vendor", "vendorId": vendor["id"]}
     conv = next((c for c in data["conversions"] if c["outputId"] == ing_id), None)
     if conv:
         sub = ing_cost(data, conv["inputId"], visiting | {ing_id})
         out_qty = conv.get("outputQty") or 1
         cost = (sub["cost"] * (conv.get("inputQty") or 1) + (conv.get("cost") or 0)) / out_qty
         return {"cost": cost, "warn": sub["warn"], "reason": "conversion", "via": conv["inputId"]}
-    inv = data["inventory"].get(ing_id, {})
-    vendor = None
-    pref_id = inv.get("preferredVendorId")
-    if pref_id:
-        vendor = next((v for v in data["vendors"] if v["id"] == pref_id and v.get("price") is not None), None)
-    if not vendor:
-        vendor = cheapest_vendor(data, ing_id)
-    if vendor:
-        return {"cost": vendor["price"], "warn": False, "reason": "vendor", "vendorId": vendor["id"]}
     return {"cost": 0.0, "warn": True, "reason": "no-price"}
 
 
@@ -257,16 +262,18 @@ def recipe_metrics(data, recipe):
 
 
 def margin_tier(s, margin):
-    """healthy at or above the healthy margin, problematic below the problematic
-    floor (or with no revenue at all), tight in between."""
+    """healthy >= healthy%, good >= good%, problematic below the problematic floor
+    (or with no revenue at all), tight in between."""
     if margin is None:
-        return "bad"
+        return "problematic"
     pct = margin * 100
     if pct >= s["marginHealthyPercent"]:
+        return "healthy"
+    if pct >= s["marginGoodPercent"]:
         return "good"
     if pct < s["marginProblematicBelowPercent"]:
-        return "bad"
-    return "warn"
+        return "problematic"
+    return "tight"
 
 
 def compute_plan(data):
@@ -315,6 +322,10 @@ def resolve_purchase_steps(data, ing_id, qty):
         if cur_id == data["settings"].get("meatIngredientId"):
             steps.append({"type": "hunt", "ingredientId": cur_id, "qty": cur_qty})
             break
+        vendor = direct_vendor(data, cur_id)
+        if vendor:
+            steps.append({"type": "buy", "ingredientId": cur_id, "qty": cur_qty, "vendor": vendor})
+            break
         conv = next((c for c in data["conversions"] if c["outputId"] == cur_id), None)
         if conv:
             input_qty_needed = math.ceil(cur_qty / (conv.get("outputQty") or 1)) * (conv.get("inputQty") or 1)
@@ -322,17 +333,7 @@ def resolve_purchase_steps(data, ing_id, qty):
                           "outputId": cur_id, "outputQty": cur_qty})
             cur_id, cur_qty = conv["inputId"], input_qty_needed
             continue
-        inv = data["inventory"].get(cur_id, {})
-        vendor = None
-        pref_id = inv.get("preferredVendorId")
-        if pref_id:
-            vendor = next((v for v in data["vendors"] if v["id"] == pref_id and v.get("price") is not None), None)
-        if not vendor:
-            vendor = cheapest_vendor(data, cur_id)
-        if vendor:
-            steps.append({"type": "buy", "ingredientId": cur_id, "qty": cur_qty, "vendor": vendor})
-        else:
-            steps.append({"type": "no-source", "ingredientId": cur_id, "qty": cur_qty})
+        steps.append({"type": "no-source", "ingredientId": cur_id, "qty": cur_qty})
         break
     return steps
 
