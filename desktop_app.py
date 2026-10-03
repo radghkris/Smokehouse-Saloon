@@ -588,17 +588,20 @@ class SettingsFrame(ttk.Frame):
         ttk.Label(pricing, text="Server price cap").grid(row=0, column=0, sticky="w")
         self.cap_var = tk.StringVar(value=str(s["priceCap"]))
         ttk.Entry(pricing, textvariable=self.cap_var, width=10).grid(row=0, column=1, padx=6)
-        ttk.Label(pricing, text="Healthy threshold (cost below)").grid(row=1, column=0, sticky="w")
-        self.healthy_var = tk.StringVar(value=str(s["thresholdHealthy"]))
-        ttk.Entry(pricing, textvariable=self.healthy_var, width=10).grid(row=1, column=1, padx=6)
-        ttk.Label(pricing, text="Problematic threshold (cost above)").grid(row=2, column=0, sticky="w")
-        self.tight_var = tk.StringVar(value=str(s["thresholdTight"]))
-        ttk.Entry(pricing, textvariable=self.tight_var, width=10).grid(row=2, column=1, padx=6)
-        ttk.Label(pricing, text="Tax rate % (reduces revenue used for profit calc)").grid(row=3, column=0, sticky="w")
+        ttk.Label(pricing, text="Target margin %").grid(row=1, column=0, sticky="w")
+        self.target_var = tk.StringVar(value=str(s.get("targetMarginPercent", 65)))
+        ttk.Entry(pricing, textvariable=self.target_var, width=10).grid(row=1, column=1, padx=6)
+        ttk.Label(pricing, text="Healthy at or above margin %").grid(row=2, column=0, sticky="w")
+        self.healthy_var = tk.StringVar(value=str(s.get("marginHealthyPercent", 80)))
+        ttk.Entry(pricing, textvariable=self.healthy_var, width=10).grid(row=2, column=1, padx=6)
+        ttk.Label(pricing, text="Problematic below margin %").grid(row=3, column=0, sticky="w")
+        self.tight_var = tk.StringVar(value=str(s.get("marginProblematicBelowPercent", 20)))
+        ttk.Entry(pricing, textvariable=self.tight_var, width=10).grid(row=3, column=1, padx=6)
+        ttk.Label(pricing, text="Tax rate % (reduces revenue used for profit calc)").grid(row=4, column=0, sticky="w")
         self.tax_var = tk.StringVar(value=str(s.get("taxRatePercent", 0)))
-        ttk.Entry(pricing, textvariable=self.tax_var, width=10).grid(row=3, column=1, padx=6)
-        ttk.Label(pricing, text="Placeholder until you know your actual rate — 0% changes nothing.", foreground=INK_DIM).grid(row=4, column=0, columnspan=2, sticky="w")
-        ttk.Button(pricing, text="Save pricing rules", command=self._save_pricing).grid(row=5, column=0, pady=(8, 0), sticky="w")
+        ttk.Entry(pricing, textvariable=self.tax_var, width=10).grid(row=4, column=1, padx=6)
+        ttk.Label(pricing, text="Placeholder until you know your actual rate — 0% changes nothing.", foreground=INK_DIM).grid(row=5, column=0, columnspan=2, sticky="w")
+        ttk.Button(pricing, text="Save pricing rules", command=self._save_pricing).grid(row=6, column=0, pady=(8, 0), sticky="w")
 
         labor = ttk.LabelFrame(self, text="Labor & Overhead", padding=10)
         labor.grid(row=1, column=0, sticky="nsew", padx=(0, 10))
@@ -637,6 +640,7 @@ class SettingsFrame(ttk.Frame):
     def _save_pricing(self):
         try:
             cap = float(self.cap_var.get())
+            target = float(self.target_var.get())
             healthy = float(self.healthy_var.get())
             tight = float(self.tight_var.get())
             tax = float(self.tax_var.get())
@@ -644,7 +648,8 @@ class SettingsFrame(ttk.Frame):
             messagebox.showerror("Invalid number", "Pricing fields must be numbers.")
             return
         s = self.app.data["settings"]
-        s["priceCap"], s["thresholdHealthy"], s["thresholdTight"], s["taxRatePercent"] = cap, healthy, tight, tax
+        s["priceCap"], s["targetMarginPercent"], s["marginHealthyPercent"] = cap, target, healthy
+        s["marginProblematicBelowPercent"], s["taxRatePercent"] = tight, tax
         eng.save_data(self.app.data)
         self.app.refresh_all()
         messagebox.showinfo("Saved", "Pricing rules saved.")
@@ -834,7 +839,7 @@ class LedgerApp(tk.Tk):
         ttk.Button(top, text="Edit Selected", command=self._edit_selected_recipe).pack(side="right", padx=4)
         ttk.Button(top, text="Delete Selected", command=self._delete_selected_recipe).pack(side="right", padx=4)
 
-        cols = ["Name", "Category", "Yield", "Labor/Item", "Craft Cost", "Cost/Item", "Sale Price", "Profit", "Margin", "Tier", "Active"]
+        cols = ["Name", "Category", "Yield", "Labor/Item", "Craft Cost", "Cost/Item", "Sale Price", "Target Price", "Profit", "Margin", "Tier", "Active"]
         widths = {c: 88 for c in cols}
         widths["Name"] = 200
         frame, self.recipes_tree = make_tree(self.tab_recipes, cols, widths, height=16)
@@ -1302,7 +1307,8 @@ class LedgerApp(tk.Tk):
             labor_per_item = m["craft"]["laborCost"] / yield_qty
             self.recipes_tree.insert("", "end", iid=rid, values=(
                 name, r["category"], r["yieldQty"], eng.fmt_money(labor_per_item), eng.fmt_money(m["craft"]["total"]), eng.fmt_money(m["costPerItem"]),
-                eng.fmt_money(r["salePrice"]) + (" (over cap)" if m["overCap"] else ""), eng.fmt_money(m["profit"]),
+                eng.fmt_money(r["salePrice"]) + (" (over cap)" if m["overCap"] else ""),
+                eng.fmt_money(m["targetPrice"]), eng.fmt_money(m["profit"]),
                 margin, tier, "Yes" if r["active"] else "No",
             ), tags=(f"tier_{m['tier']}",))
         restore_sort(self.recipes_tree)

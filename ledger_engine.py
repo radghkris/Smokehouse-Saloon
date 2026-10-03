@@ -117,7 +117,8 @@ SEED = {
         "pappys-cane-coffee": {"active": True},
     }.items()}},
     "settings": {
-        "priceCap": 0.45, "thresholdHealthy": 0.20, "thresholdTight": 0.30,
+        "priceCap": 0.45, "marginHealthyPercent": 80, "marginProblematicBelowPercent": 20,
+        "targetMarginPercent": 65,
         "meatIngredientId": "prepared-meat-cut", "meatMode": "override",
         "meatRawCost": 0, "meatProcessingFee": 0.03, "meatOverrideCost": 0.08,
         "laborRatePer30Min": 1.50, "processTimeMinutes": 3.0, "taxRatePercent": 0.0,
@@ -247,13 +248,25 @@ def recipe_metrics(data, recipe):
     profit = net_sale - cost_per_item
     margin = (profit / net_sale) if net_sale > 0 else None
     s = data["settings"]
-    tier = "good"
-    if cost_per_item > s["thresholdTight"]:
-        tier = "bad"
-    elif cost_per_item > s["thresholdHealthy"]:
-        tier = "warn"
+    tier = margin_tier(s, margin)
+    target = (s.get("targetMarginPercent") or 0) / 100.0
+    target_net = cost_per_item / (1 - target) if target < 1 else None
+    target_price = target_net / (1 - (s.get("taxRatePercent") or 0) / 100.0) if target_net is not None else None
     return {"craft": craft, "costPerItem": cost_per_item, "profit": profit, "margin": margin,
-            "tier": tier, "overCap": sale > s["priceCap"], "netSale": net_sale}
+            "tier": tier, "overCap": sale > s["priceCap"], "netSale": net_sale, "targetPrice": target_price}
+
+
+def margin_tier(s, margin):
+    """healthy at or above the healthy margin, problematic below the problematic
+    floor (or with no revenue at all), tight in between."""
+    if margin is None:
+        return "bad"
+    pct = margin * 100
+    if pct >= s["marginHealthyPercent"]:
+        return "good"
+    if pct < s["marginProblematicBelowPercent"]:
+        return "bad"
+    return "warn"
 
 
 def compute_plan(data):

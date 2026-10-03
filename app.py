@@ -51,7 +51,7 @@ with tab_dash:
         s = data["settings"]
         # st.caption renders markdown, where a pair of literal "$" is read as LaTeX math — escape them.
         md_money = lambda n: fmt_money(n).replace("$", "\\$")
-        st.caption(f"Cap: {md_money(s['priceCap'])} · Tight: over {md_money(s['thresholdHealthy'])} · Problematic: over {md_money(s['thresholdTight'])}")
+        st.caption(f"Cap: {md_money(s['priceCap'])} · Healthy: margin ≥ {s['marginHealthyPercent']}% · Problematic: margin < {s['marginProblematicBelowPercent']}%")
         watch = [(rid, r) for rid, r in recipes if metrics[rid]["tier"] != "good" or metrics[rid]["overCap"]]
         if watch:
             df = pd.DataFrame([{
@@ -413,12 +413,14 @@ with tab_settings:
     with st.form("settings_pricing"):
         s = data["settings"]
         cap = st.number_input("Server Price Cap", min_value=0.0, step=0.01, value=float(s["priceCap"]), format="%.2f")
-        healthy = st.number_input("Healthy Threshold (cost below)", min_value=0.0, step=0.01, value=float(s["thresholdHealthy"]), format="%.2f")
-        tight = st.number_input("Problematic Threshold (cost above)", min_value=0.0, step=0.01, value=float(s["thresholdTight"]), format="%.2f")
+        target_m = st.number_input("Target margin %", min_value=0.0, max_value=99.0, step=1.0, value=float(s["targetMarginPercent"]))
+        healthy = st.number_input("Healthy at or above margin %", min_value=0.0, max_value=100.0, step=1.0, value=float(s["marginHealthyPercent"]))
+        tight = st.number_input("Problematic below margin %", min_value=0.0, max_value=100.0, step=1.0, value=float(s["marginProblematicBelowPercent"]))
         tax = st.number_input("Tax Rate % (reduces revenue used for profit calc)", min_value=0.0, step=0.5, value=float(s.get("taxRatePercent", 0.0)), format="%.2f")
         st.caption("Placeholder until you know your actual rate — 0% changes nothing.")
         if st.form_submit_button("Save pricing rules"):
-            s["priceCap"], s["thresholdHealthy"], s["thresholdTight"], s["taxRatePercent"] = cap, healthy, tight, tax
+            s["priceCap"], s["targetMarginPercent"], s["marginHealthyPercent"] = cap, target_m, healthy
+            s["marginProblematicBelowPercent"], s["taxRatePercent"] = tight, tax
             save_data(data)
             st.success("Saved.")
             st.rerun()
