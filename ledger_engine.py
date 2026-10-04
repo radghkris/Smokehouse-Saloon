@@ -116,6 +116,7 @@ SEED = {
         "drovers-onion-crock": {"active": True}, "frontier-sarsaparilla": {"active": True},
         "pappys-cane-coffee": {"active": True},
     }.items()}},
+    "crafted": {},
     "settings": {
         "priceCap": 0.45, "marginHealthyPercent": 80, "marginGoodPercent": 65, "marginProblematicBelowPercent": 20,
         "targetMarginPercent": 65,
@@ -141,6 +142,9 @@ def load_data():
             if key not in data.setdefault("settings", {}):
                 data["settings"][key] = default
                 changed = True
+        if "crafted" not in data:
+            data["crafted"] = {}
+            changed = True
         for rows_name in ("vendors", "conversions"):
             if dedupe_ids(data.get(rows_name, [])):
                 changed = True
@@ -354,10 +358,23 @@ def resolve_purchase_steps(data, ing_id, qty):
     return steps
 
 
+def crafted_entry(data, recipe_id):
+    """Finished-goods record for a recipe: how many are made up (qty) and how many
+    we want to keep on hand (setPoint). Created on first use."""
+    return data.setdefault("crafted", {}).setdefault(recipe_id, {"qty": 0, "setPoint": 0})
+
+
+def crafted_short(data, recipe_id):
+    """How many finished items we're under the set point (never negative)."""
+    c = data.get("crafted", {}).get(recipe_id) or {}
+    return max(0.0, (c.get("setPoint") or 0) - (c.get("qty") or 0))
+
+
 def apply_made(data, recipe_id, crafts):
-    """Deduct ingredients for `crafts` batches of recipe_id from inventory, and
-    reduce its remaining plan target by the items produced. Returns a list of
-    human-readable ingredient shortfalls (inventory is clamped to 0, never negative)."""
+    """Deduct ingredients for `crafts` batches of recipe_id from inventory, add the
+    finished items to crafted stock, and reduce its remaining plan target by the
+    items produced. Returns a list of human-readable ingredient shortfalls
+    (inventory is clamped to 0, never negative)."""
     r = data["recipes"][recipe_id]
     yield_qty = r["yieldQty"] if r.get("yieldQty", 0) > 0 else 1
     shortfalls = []
@@ -371,6 +388,8 @@ def apply_made(data, recipe_id, crafts):
     t = data["plan"]["targets"].get(recipe_id, {"enabled": False, "qty": 0})
     t["qty"] = max(0.0, (t.get("qty", 0) or 0) - crafts * yield_qty)
     data["plan"]["targets"][recipe_id] = t
+    c = crafted_entry(data, recipe_id)
+    c["qty"] = (c.get("qty") or 0) + crafts * yield_qty
     return shortfalls
 
 

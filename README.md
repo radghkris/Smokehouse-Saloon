@@ -34,7 +34,8 @@ Everything you enter (recipes, vendors, inventory, settings) is saved to `ledger
 - **Recipes** — ingredients, craft yield, sale price; cost, profit and margin computed automatically. Toggle a recipe active/inactive right from the list.
 - **Ingredients & Conversions** — unit costs, plus raw-to-finished conversions (e.g. Sugarcane → Sugar) that resolve automatically through the cost engine.
 - **Vendors** — multiple vendor prices per ingredient across towns; cheapest is flagged automatically.
-- **Inventory** — quantities on hand, and an optional preferred supplier per ingredient.
+- **Raw Inventory** — ingredient quantities on hand, a free-text To Order note, and an optional preferred supplier per ingredient.
+- **Crafted Inventory** — finished items you have made up, plus a set point (how many to keep on hand). The Planner shows both and can restock to the set points; Mark Made adds finished items here (desktop app only).
 - **Planner** — set target quantities per recipe, then **What To Order** tells you exactly what to buy (and from where) or that it's time to go hunting, walking through any conversions along the way.
 - **Settings** — price cap, cost-tier thresholds, and Prepared Meat Cut pricing (calculated vs. flat override).
 
