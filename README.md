@@ -36,6 +36,7 @@ Everything you enter (recipes, vendors, inventory, settings) is saved to `ledger
 - **Vendors** — multiple vendor prices per ingredient across towns; cheapest is flagged automatically.
 - **Raw Inventory** — ingredient quantities on hand, a free-text To Order note, and an optional preferred supplier per ingredient.
 - **Crafted Inventory** — finished items you have made up, plus a set point (how many to keep on hand). The Planner shows both and can restock to the set points; Mark Made adds finished items here (desktop app only).
+- **Counter Order** (button in the header, next to Dark mode) — a register for ringing someone up. Pick an item from the dropdown, set a quantity, and **Add item to order**; the total updates as you go. **Copy Receipt** copies the receipt as text, and **Reset** starts a new one. Prices come from each recipe's sale price, and selling here does not change stock.
 - **Planner** — set target quantities per recipe, then **What To Order** tells you exactly what to buy (and from where) or that it's time to go hunting, walking through any conversions along the way.
 - **Settings** — price cap, cost-tier thresholds, and Prepared Meat Cut pricing (calculated vs. flat override).
 
